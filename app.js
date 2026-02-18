@@ -1,6 +1,6 @@
 const express = require('express');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const cors = require('cors');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const systemRoutes = require('./modules/system/system.routes');
@@ -18,25 +18,28 @@ const cartRoutes = require('./modules/cart/cart.routes');
 
 const app = express();
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
+app.use(cors({
+  origin: "http://localhost:5173",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
 }));
+
 
 app.use('/auth', authRoutes);
 app.use('/system', systemRoutes);
-app.use('/organizations', organizationRoutes);
-app.use('/users', userRoutes);
+app.use('/api/organizations', organizationRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/subcategories', subcategoryRoutes);
 app.use('/api/products', productRoutes);
-app.use('/api', publicProductRoutes);
-app.use('/api', publicLogoRoutes);
-app.use('/api', logoRoutes);
+app.use('/api/public', publicProductRoutes);
+app.use('/api/public', publicLogoRoutes);
+app.use('/api/logos', logoRoutes);
 app.use('/api/designs', designRoutes);
 app.use('/orders', orderRoutes);
 app.use('/cart', cartRoutes);

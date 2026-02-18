@@ -6,11 +6,11 @@ const {
   createProduct,
   getProducts,
   getProductById,
-  updateProductWithVariants,
   deleteProduct,
   addVariantPriceTier,
   addVariant,
-  addVariantImage
+  addVariantImage,
+  updateProduct
 } = require('./product.controller');
 
 const { authenticate } = require('../../middleware/auth.middleware');
@@ -21,7 +21,7 @@ const { authorize } = require('../../middleware/role.middleware');
 
 // Create product (SUPER & ADMIN)
 router.post(
-  '/',
+  '/create',
   authenticate,
   authorize('SUPER', 'ADMIN'),
   createProduct
@@ -30,7 +30,7 @@ router.post(
 
 // Get products (All logged-in users)
 router.get(
-  '/',
+  '/all-products',
   authenticate,
   getProducts
 );
@@ -46,7 +46,8 @@ router.put(
   '/:id',
   authenticate,
   authorize('SUPER', 'ADMIN'),
-  updateProductWithVariants
+  upload.any(),
+  updateProduct
 );
 
 // Delete product (SUPER & ADMIN)
@@ -62,7 +63,7 @@ router.delete(
 
 // Add variant
 router.post(
-  '/variants',
+  '/add-variants',
   authenticate,
   authorize('SUPER', 'ADMIN'),
   addVariant

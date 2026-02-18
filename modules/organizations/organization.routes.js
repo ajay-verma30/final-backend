@@ -5,9 +5,44 @@ const { authenticate } = require('../../middleware/auth.middleware');
 const { authorize } = require('../../middleware/role.middleware');
 const ROLES = require('../../constants/roles');
 
+router.post(
+  '/',
+  authenticate,
+  authorize(ROLES.SUPER),
+  controller.createOrganization
+);
 
+router.get(
+  '/stats',
+  authenticate,
+  authorize(ROLES.SUPER),
+  controller.getStats
+);
 
-router.post('/', authenticate, authorize(ROLES.SUPER), controller.createOrganization);
+router.get(
+  '/',
+  authenticate,
+  authorize(ROLES.SUPER),
+  controller.getAllOrganizations
+);
 
+router.get(
+  '/:id',
+  authenticate,
+  authorize(ROLES.SUPER),
+  controller.getOrganizationById
+);
+
+router.put(
+  '/update/:id',
+  authenticate,
+  controller.updateOrganization 
+);
+
+router.delete(
+  '/:id',
+  authenticate,
+  controller.deleteOrganization 
+);
 
 module.exports = router;

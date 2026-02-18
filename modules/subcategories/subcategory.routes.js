@@ -1,13 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const { createSubcategory, getSubcategories } = require('./subcategory.controller');
+const { createSubCategory, getSubcategoriesByCategory, deleteSubCategory, getSubCategories } = require('./subcategory.controller');
 const { authenticate } = require('../../middleware/auth.middleware');
 const { authorize } = require('../../middleware/role.middleware');
 
 // Create subcategory (SUPER & ADMIN)
-router.post('/', authenticate, authorize('SUPER', 'ADMIN'), createSubcategory);
+router.post('/', authenticate, authorize('SUPER', 'ADMIN'), createSubCategory);
+router.get('/all-subcat', authenticate, authorize('SUPER', 'ADMIN'), getSubCategories)
+router.get('/:categoryId', authenticate, getSubcategoriesByCategory);
 
-// Get subcategories (all users)
-router.get('/', authenticate, getSubcategories);
+router.delete(
+  '/sub/:id',
+  authenticate,
+  authorize('SUPER','ADMIN'),
+  deleteSubCategory
+);
 
 module.exports = router;

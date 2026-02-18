@@ -1,6 +1,8 @@
 const db = require('../../config/db');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const emailService = require('../../src/services/email.service')
+const crypto = require('crypto');
 
 exports.login = async (req, res) => {
   const connection = await db.getConnection();
@@ -24,17 +26,12 @@ exports.login = async (req, res) => {
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
     const accessToken = jwt.sign(
-      {
-        id: user.id,
-        role: user.role,
-        org_id: user.org_id
-      },
+      { id: user.id, role: user.role, org_id: user.org_id, email: user.email},
       process.env.JWT_SECRET,
       { expiresIn: '15m' }
     );
@@ -53,11 +50,22 @@ exports.login = async (req, res) => {
       [user.id, refreshToken, expiresAt]
     );
 
-    res.json({
-      accessToken,
-      refreshToken
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,     
+      secure: false, 
+      sameSite: 'lax', 
+      maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
+    res.json({
+      message: 'Login successful',
+      accessToken,
+      user: {
+        id: user.id,
+        firstName: user.first_name,
+        role: user.role
+      }
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
@@ -152,4 +160,41 @@ exports.setPassword = async (req, res) => {
   );
 
   res.json({ message: 'Password set successfully' });
+};
+
+
+exports.forgotPassword = async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    const { email } = req.body;
+    const [users] = await connection.query(
+      'SELECT id, first_name FROM users WHERE email = ? AND deleted_at IS NULL',
+      [email]
+    );
+
+    if (!users.length) {
+      return res.status(404).json({ message: 'User with this email does not exist' });
+    }
+
+    const user = users[0];
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24);
+    await connection.query(
+      'INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)',
+      [user.id, tokenHash, expiresAt]
+    );
+    const resetLink = `${process.env.FRONTEND_URL}/set-password?token=${resetToken}`;
+    
+    await emailService.sendForgotPasswordEmail(email, user.first_name, resetLink);
+
+    res.json({ message: 'Password reset link has been sent to your email.' });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  } finally {
+    connection.release();
+  }
 };
