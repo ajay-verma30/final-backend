@@ -144,20 +144,20 @@ exports.getProducts = async (req, res) => {
   }
 };
 
-// Get a specific product with variants and their images
+// Get a specific product with variants, images, and customizations
 exports.getProductById = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const { id } = req.params;
     const currentUser = req.user;
 
-    // 1️⃣ Get Product
+    // 1️⃣ Get Product Detail
     const [products] = await connection.query(
       `SELECT 
-         p.*, 
-         c.name AS category_name, 
-         s.name AS subcategory_name,
-         u.first_name AS creator_name
+          p.*, 
+          c.name AS category_name, 
+          s.name AS subcategory_name,
+          u.first_name AS creator_name
        FROM products p
        INNER JOIN categories c ON p.category_id = c.id
        INNER JOIN subcategories s ON p.subcategory_id = s.id
@@ -173,7 +173,7 @@ exports.getProductById = async (req, res) => {
 
     const product = products[0];
 
-    // 2️⃣ Authorization
+    // 2️⃣ Authorization Check
     if (currentUser) {
       if (
         currentUser.role === "ADMIN" &&
@@ -182,13 +182,11 @@ exports.getProductById = async (req, res) => {
       ) {
         return res.status(403).json({ message: "Not authorized to view this product" });
       }
-    } else {
-      if (product.is_public !== 1) {
-        return res.status(403).json({ message: "Not authorized to view this product" });
-      }
+    } else if (product.is_public !== 1) {
+      return res.status(403).json({ message: "Not authorized to view this product" });
     }
 
-    // 3️⃣ Get Variants (IMPORTANT FIX HERE)
+    // 3️⃣ Get Variants + Images + Price Tiers
     const [variants] = await connection.query(
       `SELECT * FROM product_variants 
        WHERE product_id = ? 
@@ -197,32 +195,43 @@ exports.getProductById = async (req, res) => {
       [id]
     );
 
-    // 4️⃣ Get Images + Price Tiers for each variant
     for (let variant of variants) {
-
-      // Images (FIXED)
       const [images] = await connection.query(
-        `SELECT id, image_url, view_type 
-         FROM product_variant_images 
-         WHERE product_variant_id = ? 
-         AND deleted_at IS NULL`,
+        `SELECT id, image_url, view_type FROM product_variant_images 
+         WHERE product_variant_id = ? AND deleted_at IS NULL`,
         [variant.id]
       );
 
-      // Price Tiers (Added Properly)
       const [priceTiers] = await connection.query(
-        `SELECT id, min_quantity, unit_price 
-         FROM product_variant_price_tiers
-         WHERE product_variant_id = ?
-         AND deleted_at IS NULL`,
+        `SELECT id, min_quantity, unit_price FROM product_variant_price_tiers
+         WHERE product_variant_id = ? AND deleted_at IS NULL`,
         [variant.id]
       );
 
       variant.images = images;
       variant.price_tiers = priceTiers;
     }
-
     product.variants = variants;
+
+    // 4️⃣ Get Customizations (Naya Part)
+    // Hum product_customizations ko logo_variants ke saath join kar rahe hain
+    const [customizations] = await connection.query(
+      `SELECT 
+          pc.id, 
+          pc.name, 
+          pc.pos_x, 
+          pc.pos_y, 
+          pc.logo_width, 
+          pc.logo_height,
+          lv.image_url AS logo_image_url
+       FROM product_customizations pc
+       INNER JOIN logo_variants lv ON pc.logo_variant_id = lv.id
+       WHERE pc.product_id = ? 
+       AND pc.deleted_at IS NULL`,
+      [id]
+    );
+
+    product.customizations = customizations;
 
     return res.json({ product });
 
@@ -233,7 +242,6 @@ exports.getProductById = async (req, res) => {
     connection.release();
   }
 };
-
 //update products
 exports.updateProduct = async (req, res) => {
   const connection = await db.getConnection();

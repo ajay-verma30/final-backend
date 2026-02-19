@@ -4,6 +4,7 @@ const controller = require('./organization.controller');
 const { authenticate } = require('../../middleware/auth.middleware');
 const { authorize } = require('../../middleware/role.middleware');
 const ROLES = require('../../constants/roles');
+const upload = require('../../middleware/upload.middleware');
 
 router.post(
   '/',
@@ -36,6 +37,7 @@ router.get(
 router.put(
   '/update/:id',
   authenticate,
+  upload.single('logo'),
   controller.updateOrganization 
 );
 

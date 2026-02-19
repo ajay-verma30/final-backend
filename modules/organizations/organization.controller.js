@@ -151,7 +151,8 @@ exports.updateOrganization = async (req, res) => {
     const result = await organizationService.updateOrganization(
       id,
       req.body,
-      req.user
+      req.user,
+      req.file
     );
 
     return res.status(200).json(result);

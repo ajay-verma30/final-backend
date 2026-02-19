@@ -203,35 +203,23 @@ exports.getOrganizationBySlug = async (slug) => {
 };
 
 // ✅ UPDATE ORGANIZATION + BRANDING (SUPER & ADMIN)
-exports.updateOrganization = async (orgId, data, currentUser) => {
+exports.updateOrganization = async (orgId, data, currentUser, file) => {
   const connection = await pool.getConnection();
 
   try {
     await connection.beginTransaction();
 
-    // 🔐 Role check
+    // 🔐 1. Role check
     if (!['SUPER', 'ADMIN'].includes(currentUser.role)) {
       throw new Error('UNAUTHORIZED');
     }
 
-    // 🛡 If ADMIN → can only update their own org
+    // 🛡 2. If ADMIN → can only update their own org
     if (currentUser.role === 'ADMIN' && currentUser.org_id !== Number(orgId)) {
       throw new Error('FORBIDDEN');
     }
 
-    const {
-      name,
-      phone,
-      is_active,
-      branding
-    } = data;
-
-    // Validate phone
-    if (phone && !validatePhone(phone)) {
-      throw new Error('INVALID_PHONE');
-    }
-
-    // Check org exists
+    // 🔍 3. Check org exists
     const [existing] = await connection.query(
       'SELECT id FROM organizations WHERE id = ? AND deleted_at IS NULL',
       [orgId]
@@ -241,109 +229,90 @@ exports.updateOrganization = async (orgId, data, currentUser) => {
       throw new Error('ORG_NOT_FOUND');
     }
 
+    const { name, phone, is_active } = data;
+
+    // Validate phone logic (assuming validatePhone helper exists)
+    if (phone && !validatePhone(phone)) {
+      throw new Error('INVALID_PHONE');
+    }
+
     // ---------------------------
     // 🏢 UPDATE ORGANIZATION TABLE
     // ---------------------------
     let updateFields = [];
     let updateParams = [];
 
-    if (name) {
-      updateFields.push('name = ?');
-      updateParams.push(name);
-    }
-
-    if (phone) {
-      updateFields.push('phone = ?');
-      updateParams.push(phone);
-    }
-
+    if (name) { updateFields.push('name = ?'); updateParams.push(name); }
+    if (phone) { updateFields.push('phone = ?'); updateParams.push(phone); }
     if (typeof is_active !== 'undefined') {
       updateFields.push('is_active = ?');
-      updateParams.push(is_active ? 1 : 0);
+      updateParams.push(is_active === 'true' || is_active === 1 ? 1 : 0);
     }
 
     if (updateFields.length > 0) {
       updateFields.push('updated_at = NOW()');
+      const updateQuery = `UPDATE organizations SET ${updateFields.join(', ')} WHERE id = ?`;
       updateParams.push(orgId);
-
-      const updateQuery = `
-        UPDATE organizations 
-        SET ${updateFields.join(', ')} 
-        WHERE id = ?
-      `;
-
       await connection.query(updateQuery, updateParams);
     }
 
     // ---------------------------
     // 🎨 UPDATE BRANDING TABLE
     // ---------------------------
-    if (branding) {
+    
+    // Note: Form-data mein nested objects (branding.color) aksar flat fields ki tarah aate hain
+    // Hum handle karenge dono: agar object hai ya direct fields hain
+    const branding = typeof data.branding === 'string' ? JSON.parse(data.branding) : (data.branding || {});
+    
+    // Agar Multer se file aayi hai, toh logo_url ko priority denge
+    const finalLogoUrl = file ? file.path : (branding.logo_url || data.logo_url);
 
-      const {
-        logo_url,
-        favicon_url,
-        primary_color,
-        secondary_color,
-        sidebar_color,
-        navbar_color,
-        font_family
-      } = branding;
+    // Baki fields extract karein
+    const favicon_url = branding.favicon_url || data.favicon_url || null;
+    const primary_color = branding.primary_color || data.primary_color || null;
+    const secondary_color = branding.secondary_color || data.secondary_color || null;
+    const sidebar_color = branding.sidebar_color || data.sidebar_color || null;
+    const navbar_color = branding.navbar_color || data.navbar_color || null;
+    const font_family = branding.font_family || data.font_family || null;
 
-      const [existingBranding] = await connection.query(
-        'SELECT id FROM organization_branding WHERE org_id = ?',
-        [orgId]
+    // Check if branding row exists
+    const [existingBranding] = await connection.query(
+      'SELECT id FROM organization_branding WHERE org_id = ?',
+      [orgId]
+    );
+
+    if (existingBranding.length > 0) {
+      // Update existing branding
+      // COALESCE ya logic use karein taaki existing data ud na jaye agar field nahi bheji
+      await connection.query(
+        `UPDATE organization_branding SET
+          logo_url = IFNULL(?, logo_url),
+          favicon_url = IFNULL(?, favicon_url),
+          primary_color = IFNULL(?, primary_color),
+          secondary_color = IFNULL(?, secondary_color),
+          sidebar_color = IFNULL(?, sidebar_color),
+          navbar_color = IFNULL(?, navbar_color),
+          font_family = IFNULL(?, font_family),
+          updated_at = NOW()
+        WHERE org_id = ?`,
+        [finalLogoUrl, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family, orgId]
       );
-
-      if (existingBranding.length > 0) {
-        // Update existing branding
-        await connection.query(
-          `UPDATE organization_branding SET
-            logo_url = ?,
-            favicon_url = ?,
-            primary_color = ?,
-            secondary_color = ?,
-            sidebar_color = ?,
-            navbar_color = ?,
-            font_family = ?,
-            updated_at = NOW()
-          WHERE org_id = ?`,
-          [
-            logo_url || null,
-            favicon_url || null,
-            primary_color || null,
-            secondary_color || null,
-            sidebar_color || null,
-            navbar_color || null,
-            font_family || null,
-            orgId
-          ]
-        );
-      } else {
-        // Insert new branding
-        await connection.query(
-          `INSERT INTO organization_branding
-          (org_id, logo_url, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            orgId,
-            logo_url || null,
-            favicon_url || null,
-            primary_color || null,
-            secondary_color || null,
-            sidebar_color || null,
-            navbar_color || null,
-            font_family || null
-          ]
-        );
-      }
+    } else {
+      // Insert new branding row if it doesn't exist
+      await connection.query(
+        `INSERT INTO organization_branding
+        (org_id, logo_url, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [orgId, finalLogoUrl, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family]
+      );
     }
 
     await connection.commit();
 
     return {
       success: true,
-      message: 'Organization and branding updated successfully'
+      message: 'Organization and branding updated successfully',
+      logo_url: finalLogoUrl // Return naya URL taaki frontend update ho sake
     };
 
   } catch (error) {

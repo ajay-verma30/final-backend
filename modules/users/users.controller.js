@@ -178,15 +178,10 @@ exports.myProfile = async (req, res) => {
 exports.getUsers = async (req, res) => {
   try {
     const currentUser = req.user;
+    const { orgId } = req.query; // Frontend se orgId query param uthao
+
     let query = `
-      SELECT 
-        u.id, 
-        u.first_name, 
-        u.last_name, 
-        u.email, 
-        u.role, 
-        u.org_id, 
-        o.name AS org_name 
+      SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.org_id, o.name AS org_name 
       FROM users u
       LEFT JOIN organizations o ON u.org_id = o.id
       WHERE u.deleted_at IS NULL
@@ -194,17 +189,19 @@ exports.getUsers = async (req, res) => {
     
     let params = [];
 
-    // ROLE BASED FILTERING
-    if (currentUser.role === "ADMIN") {
-      // ADMIN ko sirf apni org ke active users dikhenge
+    if (currentUser.role === "SUPER") {
+      // SUPER agar orgId bhej raha hai toh filter karo, warna sab dikhao
+      if (orgId) {
+        query += " AND u.org_id = ?";
+        params.push(orgId);
+      }
+    } else if (currentUser.role === "ADMIN") {
       query += " AND u.org_id = ?";
       params.push(currentUser.org_id);
-    } else if (currentUser.role === "ENDUSER") {
-      // ENDUSER ko sirf apni profile dikhegi
+    } else {
       query += " AND u.id = ?";
       params.push(currentUser.id);
-    } 
-    // SUPER ke liye koi filter nahi, usey sab dikhenge
+    }
 
     const [users] = await db.query(query, params);
     return res.json(users);
