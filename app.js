@@ -1,6 +1,7 @@
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const systemRoutes = require('./modules/system/system.routes');
@@ -18,22 +19,26 @@ const cartRoutes = require('./modules/cart/cart.routes');
 const groupRoutes = require('./modules/groups/groups.routes');
 const customizationRoutes = require('./modules/custom/customProduct.routes');
 const couponRoutes = require('./modules/coupons/coupons.routes');
-const stripeWebhookRoute = require('./webhook/stripe.webhook.route'); 
+const stripeWebhookRoute = require('./webhook/stripe.webhook.route');
 const statsRoutes = require('./modules/stats/stats.routes');
 const userCustom = require('./modules/usercustom/userCustom.routes');
+const userOrders = require('./modules/userorder/orders.routes');
+const orderCheckout = require('./modules/checkout/checkout.routes');
+
 const app = express();
+
 app.use('/api/webhooks/stripe', stripeWebhookRoute);
 
-
-// ─── Global middleware (after webhook route) ──────────────────────────────────
+// ─── Global middleware ────────────────────────────────────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser()); // ← add this
 app.use(cors({
   origin: ["http://localhost:5173", "http://localhost:3000"],
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization"]
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -55,5 +60,7 @@ app.use('/api/customizations', customizationRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/user/custom', userCustom);
+app.use('/api/user/orders', userOrders);
+app.use('/api/user/checkout', orderCheckout);
 
 module.exports = app;
