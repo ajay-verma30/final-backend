@@ -2,17 +2,31 @@ const db = require('../../config/db');
 
 exports.getPublicProducts = async (req, res) => {
   try {
-    const currentUser = req.user;
+    const currentUser = req.user; 
 
     let query = `
       SELECT 
         p.id,
         p.name,
         p.slug,
-        p.short_description,
+        p.description,
         p.base_price,
-        p.is_featured
+        p.gender,
+        c.id AS category_id,
+        c.name AS category_name,
+        sc.id AS sub_category_id,
+        sc.name AS sub_category_name,
+        p.is_featured,
+        p.org_id,
+        -- 📸 Product ki primary image fetch kar rahe hain
+        (SELECT pi.image_url 
+         FROM product_images pi 
+         WHERE pi.product_id = p.id 
+         ORDER BY pi.is_primary DESC, pi.id ASC 
+         LIMIT 1) as main_image
       FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
       WHERE p.deleted_at IS NULL
       AND p.is_active = 1
     `;
@@ -22,8 +36,8 @@ exports.getPublicProducts = async (req, res) => {
     if (currentUser && currentUser.org_id) {
       query += `
         AND (
-          p.org_id = ?
-          OR p.org_id IS NULL
+          p.org_id = ? 
+          OR p.org_id IS NULL 
           OR p.is_public = 1
         )
       `;
@@ -31,7 +45,7 @@ exports.getPublicProducts = async (req, res) => {
     } else {
       query += `
         AND (
-          p.org_id IS NULL
+          p.org_id IS NULL 
           OR p.is_public = 1
         )
       `;
@@ -41,14 +55,17 @@ exports.getPublicProducts = async (req, res) => {
 
     const [products] = await db.query(query, params);
 
-    return res.json(products);
+    return res.status(200).json({
+      success: true,
+      count: products.length,
+      data: products
+    });
+
   } catch (err) {
     console.error("PUBLIC PRODUCTS ERROR:", err);
     return res.status(500).json({ message: "Server error" });
   }
 };
-
-
 
 //public product details
 exports.getPublicProductDetail = async (req, res) => {
@@ -57,111 +74,102 @@ exports.getPublicProductDetail = async (req, res) => {
     const currentUser = req.user;
     const userOrgId = currentUser ? currentUser.org_id : null;
 
-    let query = `
+    // 1. Fetch Basic Product, Category, and Subcategory Details
+    const [productRows] = await db.query(`
       SELECT 
-        p.id as product_id, p.name as product_name, p.slug, p.description, p.short_description,
-        c.name as category_name, sc.name as subcategory_name,
-        pv.id as variant_id, pv.color, pv.size, pv.price, pv.stock_quantity,
-        pvi.id as image_id, pvi.image_url as product_image, pvi.view_type,
-        cpd.id as design_id, cpd.position_x_percent, cpd.position_y_percent, 
-        cpd.width_percent, cpd.height_percent,
-        lv.id as logo_variant_id, lv.image_url as logo_image, 
-        l.title as logo_name, l.is_public as logo_is_public, l.org_id as logo_org_id
+        p.id, p.name, p.slug, p.description, p.gender, p.base_price, p.org_id,
+        c.id as cat_id, c.slug as cat_slug,
+        sc.id as subcat_id, sc.category_id as subcat_cat_id, sc.slug as subcat_slug
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
-      LEFT JOIN product_variants pv ON p.id = pv.product_id
-      LEFT JOIN product_variant_images pvi ON pv.id = pvi.product_variant_id
-      
-      /* Yahan Join mein hi Security Filter hai: 
-         Sirf vahi logos join honge jo public hain ya user ki org ke hain */
-      LEFT JOIN custom_product_designs cpd ON pvi.id = cpd.product_variant_image_id
-      LEFT JOIN logo_variants lv ON cpd.logo_variant_id = lv.id
-      LEFT JOIN logos l ON lv.logo_id = l.id 
-        AND (
-          l.is_public = 1 
-          OR l.org_id IS NULL 
-          ${userOrgId ? 'OR l.org_id = ?' : ''}
-        )
-      
-      WHERE p.slug = ? 
-      AND p.is_active = 1 
-      AND p.deleted_at IS NULL
-    `;
+      WHERE p.slug = ? AND p.is_active = 1 AND p.deleted_at IS NULL
+      AND (p.is_public = 1 OR p.org_id IS NULL ${userOrgId ? 'OR p.org_id = ?' : ''})
+    `, userOrgId ? [slug, userOrgId] : [slug]);
 
-    const params = [];
-    if (userOrgId) params.push(userOrgId); 
-    params.push(slug); 
-
-    if (userOrgId) {
-      query += ` AND (p.org_id = ? OR p.org_id IS NULL OR p.is_public = 1) `;
-      params.push(userOrgId);
-    } else {
-      query += ` AND (p.org_id IS NULL OR p.is_public = 1) `;
+    if (productRows.length === 0) {
+      return res.status(404).json({ message: "Product not found" });
     }
 
-    const [rows] = await db.query(query, params);
+    const product = productRows[0];
+    const productId = product.id;
 
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "Product not found or access denied" });
-    }
+    // 2. Parallel Queries for all related tables (Better Performance)
+    const [
+      [images],          // product_images
+      [variants],        // product_variants + price_tiers
+      [catAssets],       // category_assets
+      [customizations]   // product_customizations + logos + logo_variants
+    ] = await Promise.all([
+      // A. Product Images
+      db.query(`SELECT id, image_url, is_primary FROM product_images WHERE product_id = ?`, [productId]),
+      
+      // B. Variants + Images + Price Tiers (Grouped logic in JS later)
+      db.query(`
+        SELECT 
+          pv.id, pv.color, pv.size, pv.price as variant_price, pv.sku, pv.stock_quantity,
+          pvi.id as img_id, pvi.image_url as img_url, pvi.view_type,
+          pt.id as tier_id, pt.min_quantity, pt.unit_price
+        FROM product_variants pv
+        LEFT JOIN product_variant_images pvi ON pv.id = pvi.product_variant_id AND pvi.deleted_at IS NULL
+        LEFT JOIN product_variant_price_tiers pt ON pv.id = pt.product_variant_id AND pt.deleted_at IS NULL
+        WHERE pv.product_id = ? AND pv.is_active = 1 AND pv.deleted_at IS NULL
+      `, [productId]),
 
-    const productDetail = {
-      id: rows[0].product_id,
-      name: rows[0].product_name,
-      slug: rows[0].slug,
-      description: rows[0].description,
-      short_description: rows[0].short_description,
-      category: rows[0].category_name,
-      subcategory: rows[0].subcategory_name,
-      variants: []
+      // C. Category Assets
+      db.query(`SELECT id, category_id, image_url FROM category_assets WHERE category_id = ?`, [product.cat_id]),
+
+      // D. Customizations + Logo Details
+      db.query(`
+        SELECT 
+          pc.id, pc.name as custom_name, pc.product_variant_image_id, pc.logo_variant_id,
+          pc.pos_x, pc.pos_y, pc.logo_width, pc.logo_height, pc.org_id,
+          lv.id as lv_id, lv.color as logo_color, lv.image_url as logo_url,
+          l.id as logo_id, l.title as logo_title, l.org_id as logo_org_id
+        FROM product_customizations pc
+        LEFT JOIN logo_variants lv ON pc.logo_variant_id = lv.id
+        LEFT JOIN logos l ON lv.logo_id = l.id
+        WHERE pc.product_id = ? AND pc.deleted_at IS NULL
+      `, [productId])
+    ]);
+
+    // 3. Mapping Data into nested JSON structure
+    const result = {
+      ...product,
+      category: { id: product.cat_id, slug: product.cat_slug, assets: catAssets },
+      subcategory: { id: product.subcat_id, category_id: product.subcat_cat_id, slug: product.subcat_slug },
+      product_images: images,
+      variants: [],
+      customizations: customizations
     };
 
-    rows.forEach(row => {
-      let variant = productDetail.variants.find(v => v.id === row.variant_id);
-      if (row.variant_id && !variant) {
-        variant = {
-          id: row.variant_id,
-          color: row.color,
-          size: row.size,
-          price: row.price,
-          stock: row.stock_quantity,
-          images: []
+    // Helper to group variants, images, and tiers correctly
+    variants.forEach(row => {
+      let v = result.variants.find(item => item.id === row.id);
+      if (!v) {
+        v = { 
+          id: row.id, color: row.color, size: row.size, 
+          variant_price: row.variant_price, sku: row.sku, 
+          stock: row.stock_quantity, images: [], price_tiers: [] 
         };
-        productDetail.variants.push(variant);
+        result.variants.push(v);
       }
-      if (variant && row.image_id) {
-        let img = variant.images.find(i => i.id === row.image_id);
-        if (!img) {
-          img = {
-            id: row.image_id,
-            url: row.product_image,
-            view: row.view_type,
-            placements: []
-          };
-          variant.images.push(img);
-        }
-        if (row.design_id) {
-          img.placements.push({
-            id: row.design_id,
-            logo_variant_id: row.logo_variant_id,
-            logo_name: row.logo_name,
-            logo_url: row.logo_image,
-            position: {
-              x: row.position_x_percent,
-              y: row.position_y_percent,
-              w: row.width_percent,
-              h: row.height_percent
-            }
-          });
-        }
+      
+      // Add variant image if not already added
+      if (row.img_id && !v.images.find(i => i.id === row.img_id)) {
+        v.images.push({ id: row.img_id, url: row.img_url, view_type: row.view_type });
+      }
+      
+      // Add price tier if not already added
+      if (row.tier_id && !v.price_tiers.find(t => t.id === row.tier_id)) {
+        v.price_tiers.push({ id: row.tier_id, min_qty: row.min_quantity, unit_price: row.unit_price });
       }
     });
 
-    return res.json(productDetail);
+    return res.status(200).json({ success: true, data: result });
 
   } catch (err) {
-    console.error("GET PRODUCT DETAIL ERROR:", err);
+    console.error("PUBLIC PRODUCT DETAIL ERROR:", err);
     return res.status(500).json({ message: "Server error" });
   }
 };

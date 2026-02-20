@@ -6,86 +6,62 @@ const { canManageProduct } = require('../../utils/productPermission');
 exports.createProduct = async (req, res) => {
   const connection = await db.getConnection();
   try {
-    const currentUser = req.user;     
+    const currentUser = req.user;
     let {
-      name,
-      description,
-      short_description,
-      gender,
-      base_price,
-      has_variants,
-      is_active,
-      is_featured,
-      meta_title,
-      meta_description,
-      org_id, 
-      category_id,
-      subcategory_id,
-      is_public 
+      name, description, short_description, gender, base_price,
+      category_id, subcategory_id, is_public, is_active, is_featured, org_id,
+      meta_title, meta_description
     } = req.body;
+
+    // Validation
     if (!name || !category_id || !subcategory_id) {
-      return res.status(400).json({ message: 'Name, category_id, and subcategory_id are required' });
+      return res.status(400).json({ message: 'Name, category, and subcategory are required' });
     }
-    if (currentUser.role === 'ADMIN') {
-      org_id = currentUser.org_id; 
-    } else if (currentUser.role === 'SUPER') {
-      org_id = org_id || null;
-    }
-    is_public = is_public ?? 0;
+
     const slug = slugify(name, { lower: true, strict: true });
+    const finalOrgId = currentUser.role === 'ADMIN' ? currentUser.org_id : (org_id || null);
+
     await connection.beginTransaction();
-    const [subCheck] = await connection.query(
-      'SELECT id FROM subcategories WHERE id = ? AND category_id = ? AND is_active = 1',
-      [subcategory_id, category_id]
-    );
-    if (!subCheck.length) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'Invalid subcategory mapping or category mismatch' });
-    }
-    const [catCheck] = await connection.query(
-      'SELECT supports_gender FROM categories WHERE id = ?',
-      [category_id]
-    );
-    if (catCheck.length > 0 && catCheck[0].supports_gender && !gender) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'Gender is required for this category' });
-    }
-    const [result] = await connection.query(
+
+    // STEP 1: Insert Product
+    const [productResult] = await connection.query(
       `INSERT INTO products 
       (org_id, category_id, subcategory_id, name, slug, description, short_description,
-       gender, base_price, has_variants, is_active, is_featured, meta_title, meta_description, created_by, is_public)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       gender, base_price, created_by, is_public, is_active, is_featured, meta_title, meta_description)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        org_id,            
-        category_id,
-        subcategory_id,
-        name,
-        slug,
-        description || null,
-        short_description || null,
-        gender || null,
-        base_price || 0.00,
-        has_variants ?? 1,
-        is_active ?? 1,
-        is_featured ?? 0,
-        meta_title || null,
-        meta_description || null,
-        currentUser.id,
-        is_public
+        finalOrgId, category_id, subcategory_id, name, slug, 
+        description || null, short_description || null, gender || null, 
+        base_price || 0, currentUser.id, is_public ?? 0, 
+        is_active ?? 1, is_featured ?? 0, meta_title || null, meta_description || null
       ]
     );
+
+    const productId = productResult.insertId;
+    if (req.files && req.files.length > 0) {
+      const imageEntries = req.files.map((file, index) => [
+        productId,
+        file.path,             
+        index === 0 ? 1 : 0,   
+        'FRONT'                
+      ]);
+
+      await connection.query(
+        `INSERT INTO product_images (product_id, image_url, is_primary, view_type) VALUES ?`,
+        [imageEntries]
+      );
+    }
+
     await connection.commit();
+
     return res.status(201).json({
-      message: 'Product created successfully',
-      productId: result.insertId,
-      slug: slug,
-      is_public: is_public
+      message: 'Product and images created successfully',
+      productId: productId,
+      slug: slug
     });
+
   } catch (err) {
     await connection.rollback();
-    if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(400).json({ message: 'Product slug already exists' });
-    }
     console.error("CREATE PRODUCT ERROR:", err);
     return res.status(500).json({ message: 'Server error' });
   } finally {
@@ -186,6 +162,17 @@ exports.getProductById = async (req, res) => {
       return res.status(403).json({ message: "Not authorized to view this product" });
     }
 
+    // 📸 2.5️⃣ NEW: Get Default Product Images (product_images table)
+    // Ye images product level par hain (non-variant specific)
+    const [defaultImages] = await connection.query(
+      `SELECT id, image_url, is_primary, view_type 
+       FROM product_images 
+       WHERE product_id = ? 
+       ORDER BY is_primary DESC, id ASC`,
+      [id]
+    );
+    product.images = defaultImages; // Frontend ab product.images use kar sakta hai
+
     // 3️⃣ Get Variants + Images + Price Tiers
     const [variants] = await connection.query(
       `SELECT * FROM product_variants 
@@ -196,7 +183,8 @@ exports.getProductById = async (req, res) => {
     );
 
     for (let variant of variants) {
-      const [images] = await connection.query(
+      // Variant-specific images (agar koi ho)
+      const [variantImages] = await connection.query(
         `SELECT id, image_url, view_type FROM product_variant_images 
          WHERE product_variant_id = ? AND deleted_at IS NULL`,
         [variant.id]
@@ -208,13 +196,12 @@ exports.getProductById = async (req, res) => {
         [variant.id]
       );
 
-      variant.images = images;
+      variant.images = variantImages;
       variant.price_tiers = priceTiers;
     }
     product.variants = variants;
 
-    // 4️⃣ Get Customizations (Naya Part)
-    // Hum product_customizations ko logo_variants ke saath join kar rahe hain
+    // 4️⃣ Get Customizations
     const [customizations] = await connection.query(
       `SELECT 
           pc.id, 
@@ -242,6 +229,7 @@ exports.getProductById = async (req, res) => {
     connection.release();
   }
 };
+
 //update products
 exports.updateProduct = async (req, res) => {
   const connection = await db.getConnection();

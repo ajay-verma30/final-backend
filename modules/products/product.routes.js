@@ -24,6 +24,7 @@ router.post(
   '/create',
   authenticate,
   authorize('SUPER', 'ADMIN'),
+    upload.array('images', 3),
   createProduct
 );
 
