@@ -38,7 +38,7 @@ app.use(cors({
   origin: ["http://localhost:5173", "http://localhost:3000","https://final-backend-1-2vg5.onrender.com"],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization","x-system-key"],
 }));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
