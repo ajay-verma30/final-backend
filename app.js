@@ -2,7 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, './.env') });
 
 const authRoutes = require('./modules/auth/auth.routes');
 const systemRoutes = require('./modules/system/system.routes');
