@@ -10,7 +10,7 @@ exports.bootstrapSuper = async (req, res) => {
 
     const systemKey = req.headers['x-system-key'];
 
-    if (systemKey !== "asd2327gy6$$bjgaw6612") {
+    if (systemKey !== process.env.SYSTEM_KEY) {
       return res.status(401).json({ message: 'Unauthorized' });
     }
 
