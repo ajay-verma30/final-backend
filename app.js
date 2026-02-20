@@ -20,7 +20,7 @@ const customizationRoutes = require('./modules/custom/customProduct.routes');
 const couponRoutes = require('./modules/coupons/coupons.routes');
 const stripeWebhookRoute = require('./webhook/stripe.webhook.route'); 
 const statsRoutes = require('./modules/stats/stats.routes');
-
+const userCustom = require('./modules/usercustom/userCustom.routes');
 const app = express();
 app.use('/api/webhooks/stripe', stripeWebhookRoute);
 
@@ -50,9 +50,10 @@ app.use('/api/public', publicLogoRoutes);
 app.use('/api/logos', logoRoutes);
 app.use('/api/designs', designRoutes);
 app.use('/orders', orderRoutes);
-app.use('/cart', cartRoutes);
+app.use('/api/cart', cartRoutes);
 app.use('/api/customizations', customizationRoutes);
 app.use('/api/coupons', couponRoutes);
-app.use('/api/stats', statsRoutes)
+app.use('/api/stats', statsRoutes);
+app.use('/api/user/custom', userCustom);
 
 module.exports = app;

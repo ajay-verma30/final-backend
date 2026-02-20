@@ -1,185 +1,232 @@
 const db = require('../../config/db');
-const cartService = require('./cart.services');
 
-const getOrCreateCart = async (connection, user, sessionId) => {
-  let cart;
-
-  if (user) {
-    const [existing] = await connection.query(
-      `SELECT * FROM carts WHERE user_id = ? LIMIT 1`,
-      [user.id]
-    );
-
-    if (existing.length) return existing[0];
-
-    const [result] = await connection.query(
-      `INSERT INTO carts (user_id, org_id) VALUES (?, ?)`,
-      [user.id, user.org_id]
-    );
-
-    return { id: result.insertId };
-  }
-
-  // Guest cart
-  const [existing] = await connection.query(
-    `SELECT * FROM carts WHERE session_id = ? LIMIT 1`,
-    [sessionId]
+// ─── Helper: get or create a cart for the authenticated user ──────────────────
+async function getOrCreateCart(connection, user_id, org_id) {
+  const [rows] = await connection.query(
+    `SELECT id FROM carts WHERE user_id = ? LIMIT 1`,
+    [user_id]
   );
-
-  if (existing.length) return existing[0];
+  if (rows.length > 0) return rows[0].id;
 
   const [result] = await connection.query(
-    `INSERT INTO carts (session_id, org_id) VALUES (?, ?)`,
-    [sessionId, null]
+    `INSERT INTO carts (user_id, org_id) VALUES (?, ?)`,
+    [user_id, org_id ?? 0]
   );
+  return result.insertId;
+}
 
-  return { id: result.insertId };
-};
-
-
+// ─── 1. Add to Cart ───────────────────────────────────────────────────────────
+//
+// Plain product body:
+//   product_variant_id       required
+//   quantity                 required
+//
+// Customized product body:
+//   product_variant_id       required
+//   quantity                 required
+//   custom_product_id        id returned by /api/user/custom/save
+//   custom_url               cloudinary URL of the composited design
+//   logo_variant_ids         array of logo variant ids that were applied  e.g. [1, 3]
+//   product_variant_image_id the image the logos were placed on
+//
 exports.addToCart = async (req, res) => {
   const connection = await db.getConnection();
-
   try {
-    const user = req.user || null;
-    const sessionId = req.headers['x-session-id'] || null;
-    const { product_variant_id, quantity, customization_snapshot, preview_image_url } = req.body;
+    const {
+      product_variant_id,
+      quantity,
+      // customization fields — all optional, only present for customized products
+      custom_product_id,
+      custom_url,
+      logo_variant_ids,         // array e.g. [1, 3]
+      product_variant_image_id,
+    } = req.body;
 
     if (!product_variant_id || !quantity) {
-      return res.status(400).json({ message: "Variant & quantity required" });
+      return res.status(400).json({ message: "product_variant_id and quantity are required" });
     }
+
+    const user_id = req.user.id;
+    const org_id  = req.user.org_id || null;
 
     await connection.beginTransaction();
 
-    const cart = await cartService.getOrCreateCart(connection, user, sessionId);
+    const cart_id = await getOrCreateCart(connection, user_id, org_id);
 
-    const [existing] = await connection.query(
-      `SELECT * FROM cart_items
-       WHERE cart_id = ? AND product_variant_id = ?`,
-      [cart.id, product_variant_id]
-    );
+    // Build snapshot only for customized products
+    let customization_snapshot = null;
+    let preview_image_url      = null;
 
-    if (existing.length) {
+    if (custom_product_id) {
+      customization_snapshot = JSON.stringify({
+        custom_product_id,
+        logo_variant_ids: logo_variant_ids ?? [],   // array of all logos applied
+        product_variant_image_id,
+      });
+      preview_image_url = custom_url || null;
+    }
+
+    // Check if an identical item already exists — increment qty if so.
+    // Customized items are matched by custom_product_id (each design is unique).
+    // Plain items are matched by variant with no snapshot.
+    let existingItemId = null;
+
+    if (custom_product_id) {
+      const [existing] = await connection.query(
+        `SELECT id FROM cart_items
+         WHERE cart_id = ?
+           AND product_variant_id = ?
+           AND JSON_UNQUOTE(JSON_EXTRACT(customization_snapshot, '$.custom_product_id')) = ?
+         LIMIT 1`,
+        [cart_id, product_variant_id, String(custom_product_id)]
+      );
+      if (existing.length > 0) existingItemId = existing[0].id;
+    } else {
+      const [existing] = await connection.query(
+        `SELECT id FROM cart_items
+         WHERE cart_id = ?
+           AND product_variant_id = ?
+           AND customization_snapshot IS NULL
+         LIMIT 1`,
+        [cart_id, product_variant_id]
+      );
+      if (existing.length > 0) existingItemId = existing[0].id;
+    }
+
+    if (existingItemId) {
       await connection.query(
-        `UPDATE cart_items
-         SET quantity = quantity + ?
-         WHERE id = ?`,
-        [quantity, existing[0].id]
+        `UPDATE cart_items SET quantity = quantity + ? WHERE id = ?`,
+        [quantity, existingItemId]
       );
     } else {
       await connection.query(
         `INSERT INTO cart_items
-         (cart_id, product_variant_id, quantity,
-          customization_snapshot, preview_image_url)
+           (cart_id, product_variant_id, quantity, customization_snapshot, preview_image_url)
          VALUES (?, ?, ?, ?, ?)`,
-        [
-          cart.id,
-          product_variant_id,
-          quantity,
-          customization_snapshot ? JSON.stringify(customization_snapshot) : null,
-          preview_image_url || null
-        ]
+        [cart_id, product_variant_id, quantity, customization_snapshot, preview_image_url]
       );
     }
 
     await connection.commit();
-    res.json({ message: "Added to cart" });
+
+    return res.status(201).json({
+      success: true,
+      message: "Item added to cart",
+    });
 
   } catch (err) {
     await connection.rollback();
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+    console.error("ADD TO CART ERROR:", err);
+    return res.status(500).json({ message: "Server error" });
   } finally {
     connection.release();
   }
 };
 
-
+// ─── 2. Get Cart ──────────────────────────────────────────────────────────────
 exports.getCart = async (req, res) => {
   try {
-    const user = req.user || null;
-    const sessionId = req.headers['x-session-id'] || null;
-
-    let cartQuery;
-    let param;
-
-    if (user) {
-      cartQuery = `SELECT * FROM carts WHERE user_id = ? LIMIT 1`;
-      param = user.id;
-    } else {
-      cartQuery = `SELECT * FROM carts WHERE session_id = ? LIMIT 1`;
-      param = sessionId;
-    }
-
-    const [cart] = await db.query(cartQuery, [param]);
-
-    if (!cart.length) return res.json({ items: [] });
+    const user_id = req.user.id;
 
     const [items] = await db.query(
-      `SELECT * FROM cart_items WHERE cart_id = ?`,
-      [cart[0].id]
+      `SELECT
+         ci.id,
+         ci.quantity,
+         ci.customization_snapshot,
+         ci.preview_image_url,
+         pv.id            AS variant_id,
+         pv.color,
+         pv.size,
+         pv.sku,
+         pv.price         AS variant_price,
+         p.id             AS product_id,
+         p.name           AS product_name,
+         p.base_price,
+         p.slug           AS product_slug
+       FROM carts c
+       JOIN cart_items ci  ON ci.cart_id          = c.id
+       JOIN product_variants pv ON pv.id          = ci.product_variant_id
+       JOIN products p          ON p.id           = pv.product_id
+       WHERE c.user_id = ?
+       ORDER BY ci.created_at DESC`,
+      [user_id]
     );
 
-    res.json({ cart: cart[0], items });
+    return res.status(200).json({
+      success: true,
+      count: items.length,
+      data: items,
+    });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+    console.error("GET CART ERROR:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
-
-exports.updateCartItem = async (req, res) => {
+// ─── 3. Remove Cart Item ──────────────────────────────────────────────────────
+exports.removeCartItem = async (req, res) => {
+  const connection = await db.getConnection();
   try {
-    const { itemId } = req.params;
+    const user_id    = req.user.id;
+    const { item_id } = req.params;
+
+    // Security: only delete if the item belongs to this user's cart
+    const [result] = await connection.query(
+      `DELETE ci FROM cart_items ci
+       JOIN carts c ON c.id = ci.cart_id
+       WHERE ci.id = ? AND c.user_id = ?`,
+      [item_id, user_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Cart item not found" });
+    }
+
+    await connection.commit();
+    return res.status(200).json({ success: true, message: "Item removed" });
+
+  } catch (err) {
+    await connection.rollback();
+    console.error("REMOVE CART ITEM ERROR:", err);
+    return res.status(500).json({ message: "Server error" });
+  } finally {
+    connection.release();
+  }
+};
+
+// ─── 4. Update Cart Item Quantity ─────────────────────────────────────────────
+exports.updateCartItem = async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    const user_id     = req.user.id;
+    const { item_id } = req.params;
     const { quantity } = req.body;
 
-    await db.query(
-      `UPDATE cart_items SET quantity = ? WHERE id = ?`,
-      [quantity, itemId]
+    if (!quantity || quantity < 1) {
+      return res.status(400).json({ message: "quantity must be at least 1" });
+    }
+
+    const [result] = await connection.query(
+      `UPDATE cart_items ci
+       JOIN carts c ON c.id = ci.cart_id
+       SET ci.quantity = ?
+       WHERE ci.id = ? AND c.user_id = ?`,
+      [quantity, item_id, user_id]
     );
 
-    return res.json({ message: "Cart updated" });
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Cart item not found" });
+    }
+
+    await connection.commit();
+    return res.status(200).json({ success: true, message: "Quantity updated" });
 
   } catch (err) {
-    console.error("UPDATE CART ERROR:", err);
+    await connection.rollback();
+    console.error("UPDATE CART ITEM ERROR:", err);
     return res.status(500).json({ message: "Server error" });
-  }
-};
-
-
-exports.removeCartItem = async (req, res) => {
-  try {
-    const { itemId } = req.params;
-
-    await db.query(
-      `DELETE FROM cart_items WHERE id = ?`,
-      [itemId]
-    );
-
-    return res.json({ message: "Item removed" });
-
-  } catch (err) {
-    console.error("REMOVE CART ERROR:", err);
-    return res.status(500).json({ message: "Server error" });
-  }
-};
-
-
-exports.clearCart = async (req, res) => {
-  try {
-    const user = req.user;
-    await db.query(
-      `DELETE ci FROM cart_items ci
-       JOIN carts c ON ci.cart_id = c.id
-       WHERE c.user_id = ?`,
-      [user.id]
-    );
-
-    return res.json({ message: "Cart cleared" });
-
-  } catch (err) {
-    console.error("CLEAR CART ERROR:", err);
-    return res.status(500).json({ message: "Server error" });
+  } finally {
+    connection.release();
   }
 };
