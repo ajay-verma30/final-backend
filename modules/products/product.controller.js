@@ -692,21 +692,14 @@ exports.addVariantImage = async (req, res) => {
     if (currentUser.role === 'ADMIN' && variant.org_id !== currentUser.org_id) {
       return res.status(403).json({ message: 'Not authorized' });
     }
-    const categoryViewsMap = {
-      CLOTHES: ['FRONT', 'BACK', 'SIDE'],
-      STATIONERY: ['SINGLE'],
-      MUGS: ['FRONT', 'ANGLE'],
-      BAG: ['FRONT', 'BACK', 'SIDE'],
-      DEFAULT: ['FRONT']
-    };
-    const categoryKey = variant.category_name.toUpperCase();
-    const allowedViews = categoryViewsMap[categoryKey] || categoryViewsMap.DEFAULT;
-    const viewUpper = view_type.toUpperCase();
-    if (!allowedViews.includes(viewUpper)) {
-      return res.status(400).json({ 
-        message: `Invalid view_type for category ${variant.category_name}. Allowed: ${allowedViews.join(', ')}` 
-      });
-    }
+  const ALLOWED_VIEW_TYPES = ['FRONT', 'BACK', 'SIDE'];
+const viewUpper = view_type.toUpperCase();
+
+if (!ALLOWED_VIEW_TYPES.includes(viewUpper)) {
+  return res.status(400).json({ 
+    message: `Invalid view_type. Allowed: ${ALLOWED_VIEW_TYPES.join(', ')}` 
+  });
+}
     await connection.beginTransaction();
     const results = [];
     for (const file of req.files) {
