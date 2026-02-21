@@ -34,7 +34,7 @@ const corsOptions = {
   origin: [
     "http://localhost:5173",
     "http://localhost:3000",
-    "https://final-frontend-36rb.vercel.app",
+    "https://final-frontend-umber.vercel.app",
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
