@@ -85,25 +85,22 @@ exports.getAllOrganizations = async (req, res) => {
 // ✅ GET ORGANIZATION BY ID (SUPER ONLY)
 exports.getOrganizationById = async (req, res) => {
   try {
-        const { id } = req.params;
+    const { id } = req.params;
     if (req.user.role === 'ADMIN') {
-      if (req.user.org_id !== id) {
+      if (String(req.user.org_id) !== id) {  // ✅ cast to string
         return res.status(403).json({
           message: 'Access denied. You can only view your own organization.'
         });
       }
     }
     const result = await organizationService.getOrganizationById(id);
-
     return res.status(200).json({
       message: 'Organization fetched successfully',
       data: result
     });
-
   } catch (error) {
     if (error.message === 'ORG_NOT_FOUND')
       return res.status(404).json({ message: 'Organization not found' });
-
     console.error(error);
     return res.status(500).json({ message: 'Internal server error' });
   }
