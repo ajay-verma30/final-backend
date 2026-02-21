@@ -4,7 +4,7 @@ const db = require('../../config/db');
 exports.createLogo = async (req, res) => {
   try {
     const currentUser = req.user;
-    let { title, org_id, is_public } = req.body;
+    let { title, org_id, is_public, color } = req.body;
 
     if (!title) 
       return res.status(400).json({ message: 'Title is required' });
@@ -22,9 +22,19 @@ exports.createLogo = async (req, res) => {
       [org_id, title, is_public, currentUser.id]
     );
 
+    const logoId = result.insertId;
+
+    // If image was uploaded, auto-create the first variant
+    if (req.file) {
+      await db.query(
+        'INSERT INTO logo_variants (logo_id, color, image_url) VALUES (?, ?, ?)',
+        [logoId, color || 'Original', req.file.path]
+      );
+    }
+
     return res.status(201).json({
-      message: 'Logo entry created',
-      logoId: result.insertId
+      message: 'Logo created successfully',
+      logoId
     });
 
   } catch (err) {
