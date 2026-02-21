@@ -42,7 +42,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // handle preflight for all routes
+app.options('/{*path}', cors(corsOptions)); // handle preflight for all routes
 
 // ─── Global middleware ────────────────────────────────────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: false }));
