@@ -3,30 +3,21 @@ const slugify = require('slugify');
 
 exports.createCategory = async (req, res) => {
   try {
-    const { name, org_id = null, supports_gender = 0, is_active = 1 } = req.body;
+    // parent_id hata diya, parent_segment (Enum) add kiya
+    const { name, parent_segment, org_id = null, supports_gender = 0, is_active = 1 } = req.body;
 
-    if (!name) {
-      return res.status(400).json({ message: 'Category name is required' });
+    if (!name || !parent_segment) {
+      return res.status(400).json({ message: 'Category name and segment (MENS, WOMENS, etc.) are required' });
     }
 
     const slug = slugify(name, { lower: true, strict: true });
 
-    if (parent_id) {
-      const [parent] = await db.query(
-        'SELECT id FROM categories WHERE id = ?',
-        [parent_id]
-      );
-
-      if (!parent.length) {
-        return res.status(400).json({ message: 'Invalid parent category' });
-      }
-    }
-
+    // Query update: parent_id ki jagah parent_segment aur org_id
     const [result] = await db.query(
       `INSERT INTO categories 
-       (name, slug, parent_id, supports_gender, is_active)
-       VALUES (?, ?, ?, ?, ?)`,
-      [name, slug, parent_id, supports_gender, is_active]
+       (name, slug, parent_segment, org_id, supports_gender, is_active)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [name, slug, parent_segment, org_id, supports_gender, is_active]
     );
 
     return res.status(201).json({
@@ -39,7 +30,6 @@ exports.createCategory = async (req, res) => {
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ message: 'Category slug already exists' });
     }
-
     console.error("CREATE CATEGORY ERROR:", err);
     return res.status(500).json({ message: 'Server error' });
   }
