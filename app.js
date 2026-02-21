@@ -27,6 +27,7 @@ const userOrders = require('./modules/userorder/orders.routes');
 const orderCheckout = require('./modules/checkout/checkout.routes');
 
 const app = express();
+app.set('trust proxy', 1);
 
 app.use('/api/webhooks/stripe', stripeWebhookRoute);
 
