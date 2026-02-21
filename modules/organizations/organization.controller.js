@@ -85,8 +85,12 @@ exports.getAllOrganizations = async (req, res) => {
 // ✅ GET ORGANIZATION BY ID (SUPER ONLY)
 exports.getOrganizationById = async (req, res) => {
   try {
-    if (req.user.role !== 'SUPER') {
-      return res.status(403).json({ message: 'Access denied. Super Admin only.' });
+    if (req.user.role === 'ADMIN') {
+      if (req.user.organizationId !== id) {
+        return res.status(403).json({
+          message: 'Access denied. You can only view your own organization.'
+        });
+      }
     }
 
     const { id } = req.params;
