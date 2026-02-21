@@ -35,7 +35,7 @@ exports.createOrganization = async ({ name, phone, admin }) => {
   try {
     await connection.beginTransaction();
 
-    // 1️⃣ VALIDATE PHONE
+    // 1️⃣ VALIDATE PHONE FORMAT
     if (phone && !validatePhone(phone)) {
       throw new Error('INVALID_PHONE');
     }
@@ -45,86 +45,66 @@ exports.createOrganization = async ({ name, phone, admin }) => {
       'SELECT id FROM organizations WHERE name = ? AND deleted_at IS NULL',
       [name]
     );
+    if (existingName.length > 0) throw new Error('ORG_EXISTS');
 
-    if (existingName.length > 0) {
-      throw new Error('ORG_EXISTS');
+    // 3️⃣ CHECK IF PHONE ALREADY USED BY ANOTHER ORG
+    if (phone) {
+      const [existingPhone] = await connection.query(
+        'SELECT id FROM organizations WHERE phone = ? AND deleted_at IS NULL',
+        [phone]
+      );
+      if (existingPhone.length > 0) throw new Error('PHONE_EXISTS');
     }
 
-    // 3️⃣ GENERATE AND VALIDATE SLUG
+    // 4️⃣ GENERATE AND VALIDATE SLUG
     let slug = generateSlug(name);
-
     const [existingSlug] = await connection.query(
       'SELECT id FROM organizations WHERE slug = ?',
       [slug]
     );
-
     if (existingSlug.length > 0) {
       slug = `${slug}-${Date.now()}`;
     }
 
-    // 4️⃣ CREATE ORGANIZATION
+    // 5️⃣ CREATE ORGANIZATION
     const [orgResult] = await connection.query(
-      `INSERT INTO organizations (name, slug, phone)
-       VALUES (?, ?, ?)`,
+      `INSERT INTO organizations (name, slug, phone) VALUES (?, ?, ?)`,
       [name, slug, phone || null]
     );
-
     const orgId = orgResult.insertId;
 
-    // 5️⃣ CHECK IF EMAIL ALREADY EXISTS
+    // 6️⃣ CHECK IF EMAIL ALREADY EXISTS IN USERS TABLE
     const [existingEmail] = await connection.query(
       'SELECT id FROM users WHERE email = ? AND deleted_at IS NULL',
       [admin.email]
     );
+    if (existingEmail.length > 0) throw new Error('EMAIL_EXISTS');
 
-    if (existingEmail.length > 0) {
-      throw new Error('EMAIL_EXISTS');
-    }
-
-    // 6️⃣ HASH PASSWORD
+    // 7️⃣ HASH PASSWORD
     const hashedPassword = await bcrypt.hash(admin.password, 10);
 
-    // 7️⃣ CREATE ADMIN USER
+    // 8️⃣ CREATE ADMIN USER
     const [userResult] = await connection.query(
       `INSERT INTO users 
       (org_id, first_name, last_name, email, password, role, is_active, email_verified_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        orgId,
-        admin.first_name,
-        admin.last_name,
-        admin.email,
-        hashedPassword,
-        'ADMIN',
-        0
-      ]
+      [orgId, admin.first_name, admin.last_name, admin.email, hashedPassword, 'ADMIN', 0]
     );
-
     const userId = userResult.insertId;
 
-    // 8️⃣ COMMIT TRANSACTION
+    // 9️⃣ COMMIT TRANSACTION
     await connection.commit();
 
-    // 9️⃣ SEND ORGANIZATION CREATION EMAIL
+    // 🔟 SEND ORGANIZATION CREATION EMAIL (non-blocking — failure won't rollback)
     try {
-      // Generate password reset token for setup
       const resetToken = generatePasswordResetToken(userId);
       const resetLink = `${process.env.FRONTEND_URL}/set-password?token=${resetToken}`;
-
-      // Send the organization creation email
       await emailService.sendOrganizationCreatedEmail(
-        admin.email,
-        admin.first_name,
-        name,
-        slug,
-        resetLink
+        admin.email, admin.first_name, name, slug, resetLink
       );
-
       console.log(`✅ Organization creation email sent to ${admin.email}`);
     } catch (emailError) {
-      // Log email error but don't fail the entire operation
       console.error(`⚠️ Failed to send organization creation email: ${emailError.message}`);
-      // Optionally, you might want to retry or queue this for later
     }
 
     return {
@@ -146,34 +126,28 @@ exports.createOrganization = async ({ name, phone, admin }) => {
 // ✅ GET ORGANIZATION COUNT
 exports.getOrganizationCount = async () => {
   try {
-    const query = 'SELECT COUNT(*) as total FROM organizations WHERE deleted_at IS NULL';
-    const [rows] = await pool.query(query);        
-    return rows[0].total; 
+    const [rows] = await pool.query('SELECT COUNT(*) as total FROM organizations WHERE deleted_at IS NULL');
+    return rows[0].total;
   } catch (error) {
     console.error("SQL Error in getOrganizationCount:", error.message);
     throw new Error('DATABASE_ERROR');
   }
 };
 
-// ✅ GET ORGANIZATION BY ID (with details)
+// ✅ GET ORGANIZATION BY ID (with branding details)
 exports.getOrganizationById = async (orgId) => {
   try {
-    const query = `
-      SELECT 
+    const [rows] = await pool.query(
+      `SELECT 
         o.id, o.name, o.slug, o.phone, o.is_active, o.created_at, o.updated_at,
         b.logo_url, b.favicon_url, b.primary_color, b.secondary_color, 
         b.sidebar_color, b.navbar_color, b.font_family
       FROM organizations o
       LEFT JOIN organization_branding b ON o.id = b.org_id
-      WHERE o.id = ? AND o.deleted_at IS NULL
-    `;
-
-    const [rows] = await pool.query(query, [orgId]);
-
-    if (rows.length === 0) {
-      throw new Error('ORG_NOT_FOUND');
-    }
-
+      WHERE o.id = ? AND o.deleted_at IS NULL`,
+      [orgId]
+    );
+    if (rows.length === 0) throw new Error('ORG_NOT_FOUND');
     return rows[0];
   } catch (error) {
     console.error("Get Organization Error:", error.message);
@@ -186,15 +160,10 @@ exports.getOrganizationBySlug = async (slug) => {
   try {
     const [rows] = await pool.query(
       `SELECT id, name, slug, phone, created_at, updated_at
-       FROM organizations 
-       WHERE slug = ? AND deleted_at IS NULL`,
+       FROM organizations WHERE slug = ? AND deleted_at IS NULL`,
       [slug]
     );
-
-    if (rows.length === 0) {
-      throw new Error('ORG_NOT_FOUND');
-    }
-
+    if (rows.length === 0) throw new Error('ORG_NOT_FOUND');
     return rows[0];
   } catch (error) {
     console.error("Get Organization by Slug Error:", error.message);
@@ -209,41 +178,40 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
   try {
     await connection.beginTransaction();
 
-    // 🔐 1. Role check
-    if (!['SUPER', 'ADMIN'].includes(currentUser.role)) {
-      throw new Error('UNAUTHORIZED');
-    }
+    // 🔐 Role check
+    if (!['SUPER', 'ADMIN'].includes(currentUser.role)) throw new Error('UNAUTHORIZED');
 
-    // 🛡 2. If ADMIN → can only update their own org
+    // 🛡 ADMIN can only update their own org
     if (currentUser.role === 'ADMIN' && currentUser.org_id !== Number(orgId)) {
       throw new Error('FORBIDDEN');
     }
 
-    // 🔍 3. Check org exists
+    // 🔍 Check org exists
     const [existing] = await connection.query(
       'SELECT id FROM organizations WHERE id = ? AND deleted_at IS NULL',
       [orgId]
     );
-
-    if (existing.length === 0) {
-      throw new Error('ORG_NOT_FOUND');
-    }
+    if (existing.length === 0) throw new Error('ORG_NOT_FOUND');
 
     const { name, phone, is_active } = data;
 
-    // Validate phone logic (assuming validatePhone helper exists)
-    if (phone && !validatePhone(phone)) {
-      throw new Error('INVALID_PHONE');
+    // Validate phone format
+    if (phone && !validatePhone(phone)) throw new Error('INVALID_PHONE');
+
+    // Check phone not already used by a DIFFERENT org
+    if (phone) {
+      const [phoneConflict] = await connection.query(
+        'SELECT id FROM organizations WHERE phone = ? AND id != ? AND deleted_at IS NULL',
+        [phone, orgId]
+      );
+      if (phoneConflict.length > 0) throw new Error('PHONE_EXISTS');
     }
 
-    // ---------------------------
-    // 🏢 UPDATE ORGANIZATION TABLE
-    // ---------------------------
+    // Update organization fields
     let updateFields = [];
     let updateParams = [];
-
-    if (name) { updateFields.push('name = ?'); updateParams.push(name); }
-    if (phone) { updateFields.push('phone = ?'); updateParams.push(phone); }
+    if (name)                             { updateFields.push('name = ?');      updateParams.push(name); }
+    if (phone)                            { updateFields.push('phone = ?');     updateParams.push(phone); }
     if (typeof is_active !== 'undefined') {
       updateFields.push('is_active = ?');
       updateParams.push(is_active === 'true' || is_active === 1 ? 1 : 0);
@@ -251,39 +219,30 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
 
     if (updateFields.length > 0) {
       updateFields.push('updated_at = NOW()');
-      const updateQuery = `UPDATE organizations SET ${updateFields.join(', ')} WHERE id = ?`;
-      updateParams.push(orgId);
-      await connection.query(updateQuery, updateParams);
+      await connection.query(
+        `UPDATE organizations SET ${updateFields.join(', ')} WHERE id = ?`,
+        [...updateParams, orgId]
+      );
     }
 
-    // ---------------------------
-    // 🎨 UPDATE BRANDING TABLE
-    // ---------------------------
-    
-    // Note: Form-data mein nested objects (branding.color) aksar flat fields ki tarah aate hain
-    // Hum handle karenge dono: agar object hai ya direct fields hain
-    const branding = typeof data.branding === 'string' ? JSON.parse(data.branding) : (data.branding || {});
-    
-    // Agar Multer se file aayi hai, toh logo_url ko priority denge
-    const finalLogoUrl = file ? file.path : (branding.logo_url || data.logo_url);
+    // Update branding
+    const branding = typeof data.branding === 'string'
+      ? JSON.parse(data.branding)
+      : (data.branding || {});
 
-    // Baki fields extract karein
-    const favicon_url = branding.favicon_url || data.favicon_url || null;
-    const primary_color = branding.primary_color || data.primary_color || null;
+    const finalLogoUrl    = file ? file.path : (branding.logo_url    || data.logo_url    || null);
+    const favicon_url     = branding.favicon_url     || data.favicon_url     || null;
+    const primary_color   = branding.primary_color   || data.primary_color   || null;
     const secondary_color = branding.secondary_color || data.secondary_color || null;
-    const sidebar_color = branding.sidebar_color || data.sidebar_color || null;
-    const navbar_color = branding.navbar_color || data.navbar_color || null;
-    const font_family = branding.font_family || data.font_family || null;
+    const sidebar_color   = branding.sidebar_color   || data.sidebar_color   || null;
+    const navbar_color    = branding.navbar_color    || data.navbar_color    || null;
+    const font_family     = branding.font_family     || data.font_family     || null;
 
-    // Check if branding row exists
     const [existingBranding] = await connection.query(
-      'SELECT id FROM organization_branding WHERE org_id = ?',
-      [orgId]
+      'SELECT id FROM organization_branding WHERE org_id = ?', [orgId]
     );
 
     if (existingBranding.length > 0) {
-      // Update existing branding
-      // COALESCE ya logic use karein taaki existing data ud na jaye agar field nahi bheji
       await connection.query(
         `UPDATE organization_branding SET
           logo_url = IFNULL(?, logo_url),
@@ -298,11 +257,10 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
         [finalLogoUrl, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family, orgId]
       );
     } else {
-      // Insert new branding row if it doesn't exist
       await connection.query(
         `INSERT INTO organization_branding
-        (org_id, logo_url, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (org_id, logo_url, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [orgId, finalLogoUrl, favicon_url, primary_color, secondary_color, sidebar_color, navbar_color, font_family]
       );
     }
@@ -312,7 +270,7 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
     return {
       success: true,
       message: 'Organization and branding updated successfully',
-      logo_url: finalLogoUrl // Return naya URL taaki frontend update ho sake
+      logo_url: finalLogoUrl
     };
 
   } catch (error) {
@@ -331,38 +289,23 @@ exports.deleteOrganization = async (orgId, currentUser) => {
   try {
     await connection.beginTransaction();
 
-    // 🔐 Only SUPER allowed
-    if (currentUser.role !== 'SUPER') {
-      throw new Error('UNAUTHORIZED');
-    }
+    if (currentUser.role !== 'SUPER') throw new Error('UNAUTHORIZED');
 
     const [existing] = await connection.query(
-      'SELECT id FROM organizations WHERE id = ? AND deleted_at IS NULL',
-      [orgId]
+      'SELECT id FROM organizations WHERE id = ? AND deleted_at IS NULL', [orgId]
     );
+    if (existing.length === 0) throw new Error('ORG_NOT_FOUND');
 
-    if (existing.length === 0) {
-      throw new Error('ORG_NOT_FOUND');
-    }
-
-    // Soft delete organization
     await connection.query(
-      'UPDATE organizations SET deleted_at = NOW(), is_active = 0 WHERE id = ?',
-      [orgId]
+      'UPDATE organizations SET deleted_at = NOW(), is_active = 0 WHERE id = ?', [orgId]
     );
-
-    // Soft delete users
     await connection.query(
-      'UPDATE users SET deleted_at = NOW() WHERE org_id = ?',
-      [orgId]
+      'UPDATE users SET deleted_at = NOW() WHERE org_id = ?', [orgId]
     );
 
     await connection.commit();
 
-    return {
-      success: true,
-      message: 'Organization soft deleted successfully'
-    };
+    return { success: true, message: 'Organization soft deleted successfully' };
 
   } catch (error) {
     await connection.rollback();
@@ -373,7 +316,7 @@ exports.deleteOrganization = async (orgId, currentUser) => {
   }
 };
 
-// ✅ GET ALL ORGANIZATIONS (for admin/super users)
+// ✅ GET ALL ORGANIZATIONS
 exports.getAllOrganizations = async (limit = 50, offset = 0) => {
   try {
     const [rows] = await pool.query(
@@ -384,17 +327,10 @@ exports.getAllOrganizations = async (limit = 50, offset = 0) => {
        LIMIT ? OFFSET ?`,
       [limit, offset]
     );
-
     const [countResult] = await pool.query(
       'SELECT COUNT(*) as total FROM organizations WHERE deleted_at IS NULL'
     );
-
-    return {
-      organizations: rows,
-      total: countResult[0].total,
-      limit,
-      offset
-    };
+    return { organizations: rows, total: countResult[0].total, limit, offset };
   } catch (error) {
     console.error("Get All Organizations Error:", error.message);
     throw error;
