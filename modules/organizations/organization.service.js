@@ -1,6 +1,6 @@
 const pool = require('../../config/db');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+const crypto = require('crypto'); // ← replaces jwt for reset tokens
 const emailService = require('../../src/services/email.service');
 
 // ✅ GENERATE SLUG FROM NAME
@@ -17,15 +17,6 @@ function generateSlug(name) {
 function validatePhone(phone) {
   const regex = /^\+1-[0-9]{3}-[0-9]{3}-[0-9]{4}$/;
   return regex.test(phone);
-}
-
-// ✅ GENERATE PASSWORD RESET TOKEN
-function generatePasswordResetToken(userId) {
-  return jwt.sign(
-    { userId, type: 'password-reset' },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
 }
 
 // ✅ CREATE ORGANIZATION WITH EMAIL NOTIFICATION
@@ -83,7 +74,7 @@ exports.createOrganization = async ({ name, phone, admin }) => {
     // 7️⃣ HASH PASSWORD
     const hashedPassword = await bcrypt.hash(admin.password, 10);
 
-    // 8️⃣ CREATE ADMIN USER
+    // 8️⃣ CREATE ADMIN USER (inactive until they set password via email link)
     const [userResult] = await connection.query(
       `INSERT INTO users 
       (org_id, first_name, last_name, email, password, role, is_active, email_verified_at)
@@ -95,16 +86,34 @@ exports.createOrganization = async ({ name, phone, admin }) => {
     // 9️⃣ COMMIT TRANSACTION
     await connection.commit();
 
-    // 🔟 SEND ORGANIZATION CREATION EMAIL (non-blocking — failure won't rollback)
+    // 🔟 GENERATE RESET TOKEN + STORE IN password_resets + SEND EMAIL
+    // Done after commit so a failure here doesn't rollback the org/user creation
     try {
-      const resetToken = generatePasswordResetToken(userId);
-      const resetLink = `${process.env.FRONTEND_URL}/set-password?token=${resetToken}`;
-      await emailService.sendOrganizationCreatedEmail(
-        admin.email, admin.first_name, name, slug, resetLink
+      // Generate raw random token — matches exactly what setPassword controller expects
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+      // Store hashed token in password_resets table (expires in 24 hours)
+      await pool.query(
+        `INSERT INTO password_resets (user_id, token_hash, expires_at)
+         VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
+        [userId, tokenHash]
       );
+
+      const resetLink = `${process.env.FRONTEND_URL}/set-password?token=${rawToken}`;
+
+      await emailService.sendOrganizationCreatedEmail(
+        admin.email,
+        admin.first_name,
+        name,
+        slug,
+        resetLink
+      );
+
       console.log(`✅ Organization creation email sent to ${admin.email}`);
     } catch (emailError) {
-      console.error(`⚠️ Failed to send organization creation email: ${emailError.message}`);
+      // Log full error object so Railway shows the real cause
+      console.error(`⚠️ Failed to send organization creation email:`, emailError);
     }
 
     return {
@@ -195,10 +204,8 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
 
     const { name, phone, is_active } = data;
 
-    // Validate phone format
     if (phone && !validatePhone(phone)) throw new Error('INVALID_PHONE');
 
-    // Check phone not already used by a DIFFERENT org
     if (phone) {
       const [phoneConflict] = await connection.query(
         'SELECT id FROM organizations WHERE phone = ? AND id != ? AND deleted_at IS NULL',
@@ -207,11 +214,10 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
       if (phoneConflict.length > 0) throw new Error('PHONE_EXISTS');
     }
 
-    // Update organization fields
     let updateFields = [];
     let updateParams = [];
-    if (name)                             { updateFields.push('name = ?');      updateParams.push(name); }
-    if (phone)                            { updateFields.push('phone = ?');     updateParams.push(phone); }
+    if (name)                             { updateFields.push('name = ?');     updateParams.push(name); }
+    if (phone)                            { updateFields.push('phone = ?');    updateParams.push(phone); }
     if (typeof is_active !== 'undefined') {
       updateFields.push('is_active = ?');
       updateParams.push(is_active === 'true' || is_active === 1 ? 1 : 0);
@@ -225,7 +231,6 @@ exports.updateOrganization = async (orgId, data, currentUser, file) => {
       );
     }
 
-    // Update branding
     const branding = typeof data.branding === 'string'
       ? JSON.parse(data.branding)
       : (data.branding || {});
