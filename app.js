@@ -36,7 +36,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser()); // ← add this
 app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:3000","https://final-frontend-36rb-git-main-ajay-verma30s-projects.vercel.app","https://final-backend-production-c23e.up.railway.app"],
+  origin: ["http://localhost:5173", "http://localhost:3000","https://final-frontend-36rb.vercel.app","https://final-backend-production-d094.up.railway.app"],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization","x-system-key"],
