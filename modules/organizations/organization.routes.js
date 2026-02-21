@@ -16,7 +16,7 @@ router.get('/stats', authenticate, authorize(ROLES.SUPER), controller.getStats);
 router.get('/', authenticate, authorize(ROLES.SUPER), controller.getAllOrganizations);
 
 // SUPER only — get by id
-router.get('/:id', authenticate, authorize(ROLES.SUPER), controller.getOrganizationById);
+router.get('/:id', authenticate, authorize(ROLES.SUPER, ROLES.ADMIN), controller.getOrganizationById);
 
 // SUPER + ADMIN — update (service layer enforces ADMIN can only edit their own org)
 router.put('/update/:id', authenticate, authorize(ROLES.SUPER, ROLES.ADMIN), upload.single('logo'), controller.updateOrganization);
