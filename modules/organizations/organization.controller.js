@@ -87,7 +87,7 @@ exports.getOrganizationById = async (req, res) => {
   try {
         const { id } = req.params;
     if (req.user.role === 'ADMIN') {
-      if (req.user.organizationId !== id) {
+      if (req.user.org_id !== id) {
         return res.status(403).json({
           message: 'Access denied. You can only view your own organization.'
         });
