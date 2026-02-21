@@ -14,7 +14,7 @@ const {
 } = require('./logo.controller');
 
 // CRUD for Logos
-router.post('/logo', authenticate, authorize('SUPER', 'ADMIN'), createLogo);
+router.post('/add', authenticate, authorize('SUPER', 'ADMIN'), createLogo);
 router.get('/all', authenticate, getLogos);
 router.get('/:id', authenticate, getLogoById);
 router.put('/logo/:id', authenticate, authorize('SUPER', 'ADMIN'), updateLogo);
