@@ -29,19 +29,31 @@ const orderCheckout = require('./modules/checkout/checkout.routes');
 const app = express();
 app.set('trust proxy', 1);
 
-app.use('/api/webhooks/stripe', stripeWebhookRoute);
+// ─── CORS must be first ───────────────────────────────────────────────────────
+const corsOptions = {
+  origin: [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://final-frontend-36rb.vercel.app",
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization", "x-system-key"],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // handle preflight for all routes
 
 // ─── Global middleware ────────────────────────────────────────────────────────
 app.use(helmet({ crossOriginResourcePolicy: false }));
-app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser()); // ← add this
-app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:3000","https://final-frontend-36rb.vercel.app","https://final-backend-production-d094.up.railway.app"],
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization","x-system-key"],
-}));
+app.use(cookieParser());
+
+// ─── Stripe webhook (raw body needed, BEFORE express.json()) ─────────────────
+app.use('/api/webhooks/stripe', stripeWebhookRoute);
+
+// ─── JSON body parser (after webhook) ────────────────────────────────────────
+app.use(express.json());
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/auth', authRoutes);
