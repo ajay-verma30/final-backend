@@ -85,6 +85,7 @@ exports.getAllOrganizations = async (req, res) => {
 // ✅ GET ORGANIZATION BY ID (SUPER ONLY)
 exports.getOrganizationById = async (req, res) => {
   try {
+        const { id } = req.params;
     if (req.user.role === 'ADMIN') {
       if (req.user.organizationId !== id) {
         return res.status(403).json({
@@ -92,8 +93,6 @@ exports.getOrganizationById = async (req, res) => {
         });
       }
     }
-
-    const { id } = req.params;
     const result = await organizationService.getOrganizationById(id);
 
     return res.status(200).json({

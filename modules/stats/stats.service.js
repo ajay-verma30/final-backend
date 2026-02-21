@@ -1,32 +1,39 @@
 const db = require('../../config/db');
 
 exports.getGlobalStats = async (role, orgId = null) => {
+
   let usersQuery = `SELECT COUNT(*) as count FROM users WHERE deleted_at IS NULL`;
   let productsQuery = `SELECT COUNT(*) as count FROM products WHERE deleted_at IS NULL`;
-  let ordersQuery = `SELECT COUNT(*) as count FROM orders`;
+  let ordersQuery = `SELECT COUNT(*) as count FROM orders WHERE 1=1`;
   let revenueQuery = `SELECT SUM(total_price) as total FROM orders WHERE status = 'PAID'`;
 
-  const params = [];
+  const usersParams = [];
+  const productsParams = [];
+  const ordersParams = [];
+  const revenueParams = [];
 
   if (role === 'ADMIN' && orgId) {
-    const filter = ` AND org_id = ?`;
-    usersQuery += filter;
-    productsQuery += filter;
-    ordersQuery += filter;
-    revenueQuery += filter;
-    params.push(orgId);
+    usersQuery += ` AND org_id = ?`;
+    productsQuery += ` AND org_id = ?`;
+    ordersQuery += ` AND org_id = ?`;
+    revenueQuery += ` AND org_id = ?`;
+
+    usersParams.push(orgId);
+    productsParams.push(orgId);
+    ordersParams.push(orgId);
+    revenueParams.push(orgId);
   }
 
   const [
-    [userRes], 
-    [productRes], 
-    [orderRes], 
+    [userRes],
+    [productRes],
+    [orderRes],
     [revenueRes]
   ] = await Promise.all([
-    db.query(usersQuery, params),
-    db.query(productsQuery, params),
-    db.query(ordersQuery, params),
-    db.query(revenueQuery, params)
+    db.query(usersQuery, usersParams),
+    db.query(productsQuery, productsParams),
+    db.query(ordersQuery, ordersParams),
+    db.query(revenueQuery, revenueParams)
   ]);
 
   return {
