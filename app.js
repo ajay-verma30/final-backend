@@ -25,7 +25,7 @@ const statsRoutes = require('./modules/stats/stats.routes');
 const userCustom = require('./modules/usercustom/userCustom.routes');
 const userOrders = require('./modules/userorder/orders.routes');
 const orderCheckout = require('./modules/checkout/checkout.routes');
-
+const shopfitlers = require('./modules/shopfilters/shopfilters.routes');
 const app = express();
 app.set('trust proxy', 1);
 
@@ -76,5 +76,6 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/user/custom', userCustom);
 app.use('/api/user/orders', userOrders);
 app.use('/api/user/checkout', orderCheckout);
+app.use('/api/public/shop-filters', shopfitlers);
 
 module.exports = app;
