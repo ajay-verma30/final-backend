@@ -3,21 +3,35 @@ const slugify = require('slugify');
 
 exports.createCategory = async (req, res) => {
   try {
-    // parent_id hata diya, parent_segment (Enum) add kiya
-    const { name, parent_segment, org_id = null, supports_gender = 0, is_active = 1 } = req.body;
+    const {
+      name,
+      parent_segment,
+      gender = 'UNISEX',       // NEW: default UNISEX if not provided
+      org_id = null,
+      supports_gender = 0,
+      is_active = 1
+    } = req.body;
 
     if (!name || !parent_segment) {
-      return res.status(400).json({ message: 'Category name and segment (MENS, WOMENS, etc.) are required' });
+      return res.status(400).json({ message: 'Category name and parent segment are required' });
     }
+
+    // Only validate gender when the category actually supports gender variants
+    const validGenders = ['MENS', 'WOMENS', 'KIDS', 'UNISEX'];
+    if (!validGenders.includes(gender)) {
+      return res.status(400).json({ message: `Invalid gender. Must be one of: ${validGenders.join(', ')}` });
+    }
+
+    // If supports_gender is 0, always force UNISEX regardless of what was sent
+    const resolvedGender = Number(supports_gender) === 1 ? gender : 'UNISEX';
 
     const slug = slugify(name, { lower: true, strict: true });
 
-    // Query update: parent_id ki jagah parent_segment aur org_id
     const [result] = await db.query(
       `INSERT INTO categories 
-       (name, slug, parent_segment, org_id, supports_gender, is_active)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [name, slug, parent_segment, org_id, supports_gender, is_active]
+       (name, slug, parent_segment, gender, org_id, supports_gender, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [name, slug, parent_segment, resolvedGender, org_id, supports_gender, is_active]
     );
 
     return res.status(201).json({
@@ -36,17 +50,17 @@ exports.createCategory = async (req, res) => {
 };
 
 
-
 exports.getCategories = async (req, res) => {
   try {
     const currentUser = req.user;
 
-    // Hum LEFT JOIN use karenge taaki assets milein toh theek, warna category toh aaye hi
-    // GROUP_CONCAT ya JSON_ARRAYAGG (MySQL 5.7+) use karke assets ko list mein le sakte hain
     let query = `
       SELECT 
         c.id, 
-        c.name, 
+        c.name,
+        c.slug,
+        c.parent_segment,
+        c.gender,
         c.org_id, 
         c.is_active, 
         c.supports_gender, 
@@ -63,7 +77,7 @@ exports.getCategories = async (req, res) => {
           JSON_ARRAY()
         ) AS assets
       FROM categories c
-      WHERE 1=1 
+      WHERE 1=1
     `;
 
     let params = [];
@@ -72,6 +86,8 @@ exports.getCategories = async (req, res) => {
       query += ` AND (c.org_id = ? OR c.org_id IS NULL)`;
       params.push(currentUser.org_id);
     }
+
+    query += ` ORDER BY c.parent_segment, c.name`;
 
     const [categories] = await db.query(query, params);
 
@@ -95,7 +111,10 @@ exports.uploadCategorySizeChart = async (req, res) => {
     await db.query(
       `INSERT INTO category_assets
        (category_id, asset_type, target_group, image_url, cloudinary_public_id)
-       VALUES (?, 'SIZE_CHART', ?, ?, ?)`,
+       VALUES (?, 'SIZE_CHART', ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         image_url = VALUES(image_url),
+         cloudinary_public_id = VALUES(cloudinary_public_id)`,
       [
         category_id,
         target_group,
@@ -119,7 +138,6 @@ exports.deleteCategory = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 🔹 Check exists
     const [category] = await db.query(
       'SELECT id FROM categories WHERE id = ?',
       [id]
@@ -129,7 +147,6 @@ exports.deleteCategory = async (req, res) => {
       return res.status(404).json({ message: 'Category not found' });
     }
 
-    // 🔹 Check if any product linked
     const [products] = await db.query(
       'SELECT id FROM products WHERE category_id = ? LIMIT 1',
       [id]
@@ -141,15 +158,9 @@ exports.deleteCategory = async (req, res) => {
       });
     }
 
-    // 🔹 Safe to delete
-    await db.query(
-      'DELETE FROM categories WHERE id = ?',
-      [id]
-    );
+    await db.query('DELETE FROM categories WHERE id = ?', [id]);
 
-    return res.json({
-      message: 'Category deleted successfully'
-    });
+    return res.json({ message: 'Category deleted successfully' });
 
   } catch (err) {
     console.error("DELETE CATEGORY ERROR:", err);
