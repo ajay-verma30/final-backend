@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const upload = require('../../middleware/upload.middleware')
+const upload = require('../../middleware/upload.middleware');
 
 const {
   createProduct,
@@ -10,7 +10,11 @@ const {
   addVariantPriceTier,
   addVariant,
   addVariantImage,
-  updateProduct
+  updateProduct,
+  // ✅ NEW: Size handlers
+  addVariantSize,
+  updateVariantSize,
+  deleteVariantSize
 } = require('./product.controller');
 
 const { authenticate } = require('../../middleware/auth.middleware');
@@ -24,18 +28,18 @@ router.post(
   '/create',
   authenticate,
   authorize('SUPER', 'ADMIN'),
-    upload.array('images', 3),
+  upload.array('images', 3),
   createProduct
 );
 
-
-// Get products (All logged-in users)
+// Get all products (all logged-in users)
 router.get(
   '/all-products',
   authenticate,
   getProducts
 );
 
+// Get product by ID
 router.get(
   '/:id',
   authenticate,
@@ -75,15 +79,44 @@ router.post(
   '/variants/images',
   authenticate,
   authorize('SUPER', 'ADMIN'),
-  upload.array('images', 50),   
+  upload.array('images', 50),
   addVariantImage
 );
 
+// Add variant price tier
 router.post(
   '/variants/price-tiers',
   authenticate,
   authorize('SUPER', 'ADMIN'),
   addVariantPriceTier
 );
+
+
+// ================= VARIANT SIZES ✅ NEW =================
+
+// Add a size to a variant
+router.post(
+  '/variants/sizes',
+  authenticate,
+  authorize('SUPER', 'ADMIN'),
+  addVariantSize
+);
+
+// Update a specific size
+router.put(
+  '/variants/sizes/:sizeId',
+  authenticate,
+  authorize('SUPER', 'ADMIN'),
+  updateVariantSize
+);
+
+// Soft delete a specific size
+router.delete(
+  '/variants/sizes/:sizeId',
+  authenticate,
+  authorize('SUPER', 'ADMIN'),
+  deleteVariantSize
+);
+
 
 module.exports = router;

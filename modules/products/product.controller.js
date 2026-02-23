@@ -2,7 +2,9 @@ const db = require('../../config/db');
 const slugify = require('slugify');
 const { canManageProduct } = require('../../utils/productPermission');
 
-//Create products
+// =============================================
+// CREATE PRODUCT
+// =============================================
 exports.createProduct = async (req, res) => {
   const connection = await db.getConnection();
   try {
@@ -13,7 +15,6 @@ exports.createProduct = async (req, res) => {
       meta_title, meta_description
     } = req.body;
 
-    // Validation
     if (!name || !category_id || !subcategory_id) {
       return res.status(400).json({ message: 'Name, category, and subcategory are required' });
     }
@@ -23,27 +24,27 @@ exports.createProduct = async (req, res) => {
 
     await connection.beginTransaction();
 
-    // STEP 1: Insert Product
     const [productResult] = await connection.query(
       `INSERT INTO products 
       (org_id, category_id, subcategory_id, name, slug, description, short_description,
        gender, base_price, created_by, is_public, is_active, is_featured, meta_title, meta_description)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        finalOrgId, category_id, subcategory_id, name, slug, 
-        description || null, short_description || null, gender || null, 
-        base_price || 0, currentUser.id, is_public ?? 0, 
+        finalOrgId, category_id, subcategory_id, name, slug,
+        description || null, short_description || null, gender || null,
+        base_price || 0, currentUser.id, is_public ?? 0,
         is_active ?? 1, is_featured ?? 0, meta_title || null, meta_description || null
       ]
     );
 
     const productId = productResult.insertId;
+
     if (req.files && req.files.length > 0) {
       const imageEntries = req.files.map((file, index) => [
         productId,
-        file.path,             
-        index === 0 ? 1 : 0,   
-        'FRONT'                
+        file.path,
+        index === 0 ? 1 : 0,
+        'FRONT'
       ]);
 
       await connection.query(
@@ -55,9 +56,9 @@ exports.createProduct = async (req, res) => {
     await connection.commit();
 
     return res.status(201).json({
-      message: 'Product and images created successfully',
-      productId: productId,
-      slug: slug
+      message: 'Product created successfully',
+      productId,
+      slug
     });
 
   } catch (err) {
@@ -69,12 +70,14 @@ exports.createProduct = async (req, res) => {
   }
 };
 
-// Get all products with Category and Subcategory Names
+
+// =============================================
+// GET ALL PRODUCTS
+// =============================================
 exports.getProducts = async (req, res) => {
   try {
     const currentUser = req.user;
 
-    // 1. Dashboard Security: If there is no user, block access immediately
     if (!currentUser) {
       return res.status(401).json({ message: "Unauthorized: Dashboard access required" });
     }
@@ -103,19 +106,12 @@ exports.getProducts = async (req, res) => {
 
     const queryParams = [];
 
-    // 2. Logic Implementation
     if (currentUser.role === 'SUPER') {
-      // SUPER sees all: We don't append any extra org_id filters
       console.log("Super user access: Fetching all records");
-      
     } else if (currentUser.role === 'ADMIN') {
-      // ADMIN only sees their own organization's products
       query += ` AND p.org_id = ?`;
       queryParams.push(currentUser.org_id);
-      
     } else {
-      // Catch-all for other roles (e.g., 'USER') to prevent them from seeing everything
-      // You can either return empty or restrict them further here
       query += ` AND p.org_id = ? AND p.is_public = 1`;
       queryParams.push(currentUser.org_id);
     }
@@ -137,14 +133,16 @@ exports.getProducts = async (req, res) => {
 };
 
 
-// Get a specific product with variants, images, and customizations
+// =============================================
+// GET PRODUCT BY ID
+// =============================================
 exports.getProductById = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const { id } = req.params;
     const currentUser = req.user;
 
-    // 1️⃣ Get Product Detail
+    // 1. Product detail
     const [products] = await connection.query(
       `SELECT 
           p.*, 
@@ -155,8 +153,7 @@ exports.getProductById = async (req, res) => {
        INNER JOIN categories c ON p.category_id = c.id
        INNER JOIN subcategories s ON p.subcategory_id = s.id
        LEFT JOIN users u ON p.created_by = u.id
-       WHERE p.id = ? 
-       AND p.deleted_at IS NULL`,
+       WHERE p.id = ? AND p.deleted_at IS NULL`,
       [id]
     );
 
@@ -166,7 +163,7 @@ exports.getProductById = async (req, res) => {
 
     const product = products[0];
 
-    // 2️⃣ Authorization Check
+    // 2. Authorization
     if (currentUser) {
       if (
         currentUser.role === "ADMIN" &&
@@ -179,8 +176,7 @@ exports.getProductById = async (req, res) => {
       return res.status(403).json({ message: "Not authorized to view this product" });
     }
 
-    // 📸 2.5️⃣ NEW: Get Default Product Images (product_images table)
-    // Ye images product level par hain (non-variant specific)
+    // 3. Default product images
     const [defaultImages] = await connection.query(
       `SELECT id, image_url, is_primary, view_type 
        FROM product_images 
@@ -188,50 +184,54 @@ exports.getProductById = async (req, res) => {
        ORDER BY is_primary DESC, id ASC`,
       [id]
     );
-    product.images = defaultImages; // Frontend ab product.images use kar sakta hai
+    product.images = defaultImages;
 
-    // 3️⃣ Get Variants + Images + Price Tiers
+    // 4. Variants with images, price tiers, AND sizes
     const [variants] = await connection.query(
       `SELECT * FROM product_variants 
-       WHERE product_id = ? 
-       AND deleted_at IS NULL 
-       AND is_active = 1`,
+       WHERE product_id = ? AND deleted_at IS NULL AND is_active = 1`,
       [id]
     );
 
     for (let variant of variants) {
-      // Variant-specific images (agar koi ho)
+      // Variant images
       const [variantImages] = await connection.query(
         `SELECT id, image_url, view_type FROM product_variant_images 
          WHERE product_variant_id = ? AND deleted_at IS NULL`,
         [variant.id]
       );
 
+      // Price tiers
       const [priceTiers] = await connection.query(
         `SELECT id, min_quantity, unit_price FROM product_variant_price_tiers
          WHERE product_variant_id = ? AND deleted_at IS NULL`,
         [variant.id]
       );
 
-      variant.images = variantImages;
+      // ✅ Sizes from product_variant_sizes
+      const [sizes] = await connection.query(
+        `SELECT id, size, sku, stock_quantity, is_active
+         FROM product_variant_sizes
+         WHERE product_variant_id = ? AND deleted_at IS NULL AND is_active = 1
+         ORDER BY id ASC`,
+        [variant.id]
+      );
+
+      variant.images      = variantImages;
       variant.price_tiers = priceTiers;
+      variant.sizes       = sizes;
     }
+
     product.variants = variants;
 
-    // 4️⃣ Get Customizations
+    // 5. Customizations
     const [customizations] = await connection.query(
       `SELECT 
-          pc.id, 
-          pc.name, 
-          pc.pos_x, 
-          pc.pos_y, 
-          pc.logo_width, 
-          pc.logo_height,
+          pc.id, pc.name, pc.pos_x, pc.pos_y, pc.logo_width, pc.logo_height,
           lv.image_url AS logo_image_url
        FROM product_customizations pc
        INNER JOIN logo_variants lv ON pc.logo_variant_id = lv.id
-       WHERE pc.product_id = ? 
-       AND pc.deleted_at IS NULL`,
+       WHERE pc.product_id = ? AND pc.deleted_at IS NULL`,
       [id]
     );
 
@@ -247,7 +247,10 @@ exports.getProductById = async (req, res) => {
   }
 };
 
-//update products
+
+// =============================================
+// UPDATE PRODUCT
+// =============================================
 exports.updateProduct = async (req, res) => {
   const connection = await db.getConnection();
 
@@ -256,39 +259,29 @@ exports.updateProduct = async (req, res) => {
     const currentUser = req.user;
 
     let {
-      name,
-      description,
-      short_description,
-      gender,
-      base_price,
-      is_active,
-      is_featured,
-      is_public,
-      category_id,
-      subcategory_id,
-      meta_title,
-      meta_description,
+      name, description, short_description, gender, base_price,
+      is_active, is_featured, is_public, category_id, subcategory_id,
+      meta_title, meta_description,
       variants,
       delete_image_ids,
-      delete_variant_ids
+      delete_variant_ids,
+      delete_size_ids       // ✅ NEW
     } = req.body;
 
-    // ✅ SAFE JSON PARSING (because form-data sends string)
+    // Safe JSON parsing (form-data sends strings)
     try {
-      variants = variants ? JSON.parse(variants) : [];
-      delete_image_ids = delete_image_ids ? JSON.parse(delete_image_ids) : [];
-      delete_variant_ids = delete_variant_ids ? JSON.parse(delete_variant_ids) : [];
+      variants           = variants          ? JSON.parse(variants)          : [];
+      delete_image_ids   = delete_image_ids  ? JSON.parse(delete_image_ids)  : [];
+      delete_variant_ids = delete_variant_ids? JSON.parse(delete_variant_ids): [];
+      delete_size_ids    = delete_size_ids   ? JSON.parse(delete_size_ids)   : []; // ✅ NEW
     } catch (parseErr) {
-      return res.status(400).json({ 
-        message: 'Invalid JSON format in variants or delete_image_ids',
-        error: parseErr.message 
+      return res.status(400).json({
+        message: 'Invalid JSON in request body fields',
+        error: parseErr.message
       });
     }
 
-    // ✅ VALIDATION
-    if (!id) {
-      return res.status(400).json({ message: 'Product ID is required' });
-    }
+    if (!id) return res.status(400).json({ message: 'Product ID is required' });
 
     if (base_price !== undefined && base_price !== null && base_price < 0) {
       return res.status(400).json({ message: 'Base price cannot be negative' });
@@ -299,69 +292,65 @@ exports.updateProduct = async (req, res) => {
         if (variant.price !== undefined && variant.price !== null && variant.price < 0) {
           return res.status(400).json({ message: 'Variant price cannot be negative' });
         }
-        if (variant.stock_quantity !== undefined && variant.stock_quantity !== null && variant.stock_quantity < 0) {
-          return res.status(400).json({ message: 'Stock quantity cannot be negative' });
+        // ✅ Validate sizes within variants
+        if (variant.sizes && Array.isArray(variant.sizes)) {
+          for (let sz of variant.sizes) {
+            if (sz.stock_quantity !== undefined && sz.stock_quantity < 0) {
+              return res.status(400).json({ message: 'Size stock_quantity cannot be negative' });
+            }
+          }
         }
       }
     }
 
     await connection.beginTransaction();
 
-    // 1️⃣ Check product existence
+    // Check product existence
     const [existing] = await connection.query(
       'SELECT org_id FROM products WHERE id = ? AND deleted_at IS NULL',
       [id]
     );
-
     if (!existing.length) {
       await connection.rollback();
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    // ✅ AUTHORIZATION CHECK
+    // Authorization
     if (currentUser.role === 'ADMIN' && existing[0].org_id !== currentUser.org_id) {
       await connection.rollback();
       return res.status(403).json({ message: 'Not authorized to update this product' });
     }
 
-    // 2️⃣ Update Product
+    // Slug update
     let slugUpdate = '';
     let slugParam = [];
-
     if (name) {
       const newSlug = slugify(name, { lower: true, strict: true });
       slugUpdate = ', slug = ?';
       slugParam = [newSlug];
     }
 
-    // ✅ Parse boolean values from form-data (they come as strings)
     const parseBoolean = (val) => {
       if (val === undefined || val === null) return undefined;
-      if (typeof val === 'boolean') return val;
+      if (typeof val === 'boolean') return val ? 1 : 0;
       if (val === 'true' || val === 1 || val === '1') return 1;
       return 0;
     };
 
+    // Update product core fields
     const updateParams = [
-      name,
-      description,
-      short_description,
-      gender,
+      name, description, short_description, gender,
       base_price ? parseFloat(base_price) : undefined,
-      parseBoolean(is_active),
-      parseBoolean(is_featured),
-      parseBoolean(is_public),
+      parseBoolean(is_active), parseBoolean(is_featured), parseBoolean(is_public),
       category_id ? parseInt(category_id) : undefined,
       subcategory_id ? parseInt(subcategory_id) : undefined,
-      meta_title,
-      meta_description,
+      meta_title, meta_description,
       ...slugParam,
       id
     ];
 
     await connection.query(
-      `
-      UPDATE products SET 
+      `UPDATE products SET 
         name = COALESCE(?, name),
         description = COALESCE(?, description),
         short_description = COALESCE(?, short_description),
@@ -376,26 +365,37 @@ exports.updateProduct = async (req, res) => {
         meta_description = COALESCE(?, meta_description),
         updated_at = NOW()
         ${slugUpdate}
-      WHERE id = ?
-      `,
+      WHERE id = ?`,
       updateParams
     );
 
-    // 3️⃣ Soft Delete Images
-    if (delete_image_ids && delete_image_ids.length > 0) {
+    // Soft delete: product images
+    if (delete_image_ids.length > 0) {
       await connection.query(
         'UPDATE product_variant_images SET deleted_at = NOW() WHERE id IN (?) AND deleted_at IS NULL',
         [delete_image_ids]
       );
     }
 
-    // 4️⃣ Soft Delete Variants
-    if (delete_variant_ids && delete_variant_ids.length > 0) {
+    // ✅ NEW: Soft delete specific sizes
+    if (delete_size_ids.length > 0) {
+      await connection.query(
+        'UPDATE product_variant_sizes SET deleted_at = NOW() WHERE id IN (?) AND deleted_at IS NULL',
+        [delete_size_ids]
+      );
+    }
+
+    // Soft delete variants (and cascade their sizes)
+    if (delete_variant_ids.length > 0) {
       await connection.query(
         'UPDATE product_variants SET deleted_at = NOW() WHERE id IN (?) AND product_id = ? AND deleted_at IS NULL',
         [delete_variant_ids, id]
       );
-      // Also delete associated price tiers and images
+      // ✅ Soft delete sizes for these variants
+      await connection.query(
+        'UPDATE product_variant_sizes SET deleted_at = NOW() WHERE product_variant_id IN (?) AND deleted_at IS NULL',
+        [delete_variant_ids]
+      );
       await connection.query(
         'DELETE FROM product_variant_price_tiers WHERE product_variant_id IN (?)',
         [delete_variant_ids]
@@ -406,112 +406,129 @@ exports.updateProduct = async (req, res) => {
       );
     }
 
-    // 5️⃣ Handle Variants
+    // Handle variants
     if (variants && variants.length > 0) {
       for (let i = 0; i < variants.length; i++) {
         const variant = variants[i];
         let currentVariantId = variant.id;
 
-        // 🔹 Update existing
+        // Update existing variant
         if (currentVariantId && currentVariantId !== 'new') {
           await connection.query(
             `UPDATE product_variants SET 
               color = COALESCE(?, color),
-              size = COALESCE(?, size),
               sku = COALESCE(?, sku),
               price = COALESCE(?, price),
-              stock_quantity = COALESCE(?, stock_quantity),
               is_active = COALESCE(?, is_active),
               updated_at = NOW()
              WHERE id = ? AND product_id = ? AND deleted_at IS NULL`,
             [
               variant.color,
-              variant.size,
               variant.sku,
               variant.price ? parseFloat(variant.price) : undefined,
-              variant.stock_quantity !== undefined && variant.stock_quantity !== null ? parseInt(variant.stock_quantity) : undefined,
               parseBoolean(variant.is_active),
               currentVariantId,
               id
             ]
           );
         }
-        // 🔹 Create new
+        // Create new variant
         else {
           const [newVariant] = await connection.query(
             `INSERT INTO product_variants 
-             (product_id, color, size, sku, price, stock_quantity, is_active, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+             (product_id, color, sku, price, is_active, created_at)
+             VALUES (?, ?, ?, ?, ?, NOW())`,
             [
               id,
               variant.color || null,
-              variant.size || null,
               variant.sku || null,
               variant.price ? parseFloat(variant.price) : 0,
-              variant.stock_quantity ? parseInt(variant.stock_quantity) : 0,
               variant.is_active ? parseBoolean(variant.is_active) : 1
             ]
           );
-
           currentVariantId = newVariant.insertId;
         }
 
-        // 🔹 Replace price tiers
-        if (variant.price_tiers) {
-          await connection.query(
-            'DELETE FROM product_variant_price_tiers WHERE product_variant_id = ?',
-            [currentVariantId]
-          );
+        // ✅ NEW: Handle sizes for this variant
+        if (variant.sizes && Array.isArray(variant.sizes)) {
+          for (const sz of variant.sizes) {
+            if (!sz.size) continue;
 
-          if (variant.price_tiers.length > 0) {
-            for (const tier of variant.price_tiers) {
-              if (!tier.min_quantity || !tier.unit_price) continue;
-
+            if (sz.id && sz.id !== 'new') {
+              // Update existing size
               await connection.query(
-                `INSERT INTO product_variant_price_tiers 
-                 (product_variant_id, min_quantity, unit_price)
-                 VALUES (?, ?, ?)`,
+                `UPDATE product_variant_sizes SET
+                  size = COALESCE(?, size),
+                  sku = COALESCE(?, sku),
+                  stock_quantity = COALESCE(?, stock_quantity),
+                  is_active = COALESCE(?, is_active),
+                  updated_at = NOW()
+                 WHERE id = ? AND product_variant_id = ? AND deleted_at IS NULL`,
+                [
+                  sz.size ? sz.size.toUpperCase() : undefined,
+                  sz.sku  ? sz.sku.trim()         : undefined,
+                  sz.stock_quantity !== undefined  ? parseInt(sz.stock_quantity) : undefined,
+                  parseBoolean(sz.is_active),
+                  sz.id,
+                  currentVariantId
+                ]
+              );
+            } else {
+              // Insert new size — INSERT IGNORE to handle duplicate silently
+              await connection.query(
+                `INSERT IGNORE INTO product_variant_sizes
+                 (product_variant_id, size, sku, stock_quantity, is_active)
+                 VALUES (?, ?, ?, ?, ?)`,
                 [
                   currentVariantId,
-                  parseInt(tier.min_quantity),
-                  parseFloat(tier.unit_price)
+                  sz.size.toUpperCase(),
+                  sz.sku ? sz.sku.trim() : null,
+                  sz.stock_quantity ? parseInt(sz.stock_quantity) : 0,
+                  sz.is_active !== undefined ? parseBoolean(sz.is_active) : 1
                 ]
               );
             }
           }
         }
 
-        // 🔹 Handle Images
-        // 🔹 Handle Images (Improved Logic)
-if (req.files && req.files.length > 0) {
-    // 1. Pehle check karo agar existing variant hai (ID use karo)
-    // 2. Agar naya variant hai, toh loop index wala fallback use karo
-    const variantKey = (variant.id && variant.id !== 'new') 
-        ? `variant_images_${variant.id}` 
-        : `variant_images_new_${i}`;
+        // Replace price tiers
+        if (variant.price_tiers) {
+          await connection.query(
+            'DELETE FROM product_variant_price_tiers WHERE product_variant_id = ?',
+            [currentVariantId]
+          );
+          for (const tier of variant.price_tiers) {
+            if (!tier.min_quantity || !tier.unit_price) continue;
+            await connection.query(
+              `INSERT INTO product_variant_price_tiers (product_variant_id, min_quantity, unit_price)
+               VALUES (?, ?, ?)`,
+              [currentVariantId, parseInt(tier.min_quantity), parseFloat(tier.unit_price)]
+            );
+          }
+        }
 
-    const files = req.files.filter(f => f.fieldname === variantKey);
-    
-    console.log(`Processing ${files.length} files for variant key: ${variantKey}`);
+        // Handle variant images
+        if (req.files && req.files.length > 0) {
+          const variantKey = (variant.id && variant.id !== 'new')
+            ? `variant_images_${variant.id}`
+            : `variant_images_new_${i}`;
 
-    for (const file of files) {
-        await connection.query(
-            `INSERT INTO product_variant_images 
-            (product_variant_id, image_url, view_type, created_at)
-            VALUES (?, ?, ?, NOW())`,
-            [
-                currentVariantId, // Ye wahi ID hai jo update ya insert ke baad mili
-                file.path,
-                variant.view_type || 'FRONT'
-            ]
-        );
-    }
-}
+          const files = req.files.filter(f => f.fieldname === variantKey);
+          console.log(`Processing ${files.length} files for variant key: ${variantKey}`);
+
+          for (const file of files) {
+            await connection.query(
+              `INSERT INTO product_variant_images 
+               (product_variant_id, image_url, view_type, created_at)
+               VALUES (?, ?, ?, NOW())`,
+              [currentVariantId, file.path, variant.view_type || 'FRONT']
+            );
+          }
+        }
       }
     }
 
     await connection.commit();
-
     console.log("PRODUCT UPDATE SUCCESS:", { id, variants: variants?.length || 0 });
 
     return res.json({
@@ -527,7 +544,6 @@ if (req.files && req.files.length > 0) {
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ message: 'Duplicate SKU or Slug found' });
     }
-
     if (err.code === 'ER_NO_REFERENCED_ROW') {
       return res.status(400).json({ message: 'Invalid category or subcategory ID' });
     }
@@ -539,15 +555,19 @@ if (req.files && req.files.length > 0) {
 };
 
 
-// Delete Product (soft delete)
+// =============================================
+// DELETE PRODUCT (soft delete)
+// =============================================
 exports.deleteProduct = async (req, res) => {
-  const connection = await db.getConnection(); // Transaction ke liye connection
+  const connection = await db.getConnection();
   try {
     const { id } = req.params;
     const currentUser = req.user;
-    await connection.beginTransaction(); 
+
+    await connection.beginTransaction();
+
     const [products] = await connection.query(
-      'SELECT org_id FROM products WHERE id = ? AND deleted_at IS NULL', 
+      'SELECT org_id FROM products WHERE id = ? AND deleted_at IS NULL',
       [id]
     );
 
@@ -562,48 +582,57 @@ exports.deleteProduct = async (req, res) => {
     }
 
     const now = new Date();
-    await connection.query(
-      'UPDATE products SET deleted_at = ? WHERE id = ?', 
-      [now, id]
+
+    // Get variant IDs first for cascading
+    const [variantRows] = await connection.query(
+      'SELECT id FROM product_variants WHERE product_id = ?',
+      [id]
     );
+    const variantIds = variantRows.map(v => v.id);
+
+    await connection.query('UPDATE products SET deleted_at = ? WHERE id = ?', [now, id]);
     await connection.query(
-      'UPDATE product_variants SET deleted_at = ? WHERE product_id = ?', 
+      'UPDATE product_variants SET deleted_at = ? WHERE product_id = ?',
       [now, id]
     );
 
-    await connection.commit(); 
-    return res.json({ message: 'Product and all its variants deleted successfully' });
+    // ✅ Soft delete all sizes linked to these variants
+    if (variantIds.length > 0) {
+      await connection.query(
+        'UPDATE product_variant_sizes SET deleted_at = ? WHERE product_variant_id IN (?)',
+        [now, variantIds]
+      );
+    }
+
+    await connection.commit();
+    return res.json({ message: 'Product, variants, and sizes deleted successfully' });
 
   } catch (err) {
-    await connection.rollback(); 
+    await connection.rollback();
     console.error(err);
     return res.status(500).json({ message: 'Server error' });
   } finally {
-    connection.release(); 
+    connection.release();
   }
 };
 
-// Add product variant
+
+// =============================================
+// ADD VARIANT
+// =============================================
 exports.addVariant = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const currentUser = req.user;
-    const { 
-      product_id, 
-      color, 
-      size, 
-      sku, 
-      price, 
-      stock_quantity, 
-      is_active 
-    } = req.body;
+    // size & stock_quantity removed — now managed via product_variant_sizes
+    const { product_id, color, sku, price, is_active } = req.body;
 
-    if (!product_id || !color || !size || !sku || !price) {
-      return res.status(400).json({ message: 'Product ID, color, size, sku, and price are required' });
+    if (!product_id || !color || !price) {
+      return res.status(400).json({ message: 'product_id, color, and price are required' });
     }
 
     const [products] = await connection.query(
-      'SELECT id, org_id FROM products WHERE id = ? AND deleted_at IS NULL', 
+      'SELECT id, org_id FROM products WHERE id = ? AND deleted_at IS NULL',
       [product_id]
     );
 
@@ -611,30 +640,26 @@ exports.addVariant = async (req, res) => {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const product = products[0];
-
-    if (currentUser.role === 'ADMIN' && product.org_id !== currentUser.org_id) {
-      return res.status(403).json({ message: 'Not authorized to add variants to this organization\'s product' });
+    if (currentUser.role === 'ADMIN' && products[0].org_id !== currentUser.org_id) {
+      return res.status(403).json({ message: "Not authorized to add variants to this organization's product" });
     }
 
     const [result] = await connection.query(
       `INSERT INTO product_variants 
-      (product_id, color, size, sku, price, stock_quantity, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (product_id, color, sku, price, is_active)
+       VALUES (?, ?, ?, ?, ?)`,
       [
-        product_id, 
-        color.toUpperCase(), 
-        size.toUpperCase(), 
-        sku.trim(), 
-        price, 
-        stock_quantity || 0, 
+        product_id,
+        color.toUpperCase(),
+        sku ? sku.trim() : null,
+        price,
         is_active ?? 1
       ]
     );
 
-    return res.status(201).json({ 
-      message: 'Variant added successfully', 
-      variantId: result.insertId 
+    return res.status(201).json({
+      message: 'Variant added successfully',
+      variantId: result.insertId
     });
 
   } catch (err) {
@@ -642,11 +667,7 @@ exports.addVariant = async (req, res) => {
       if (err.sqlMessage.includes('uniq_variant_sku')) {
         return res.status(400).json({ message: 'SKU already exists. Please use a unique SKU.' });
       }
-      if (err.sqlMessage.includes('uniq_product_color_size')) {
-        return res.status(400).json({ message: 'This color and size combination already exists for this product.' });
-      }
     }
-    
     console.error("ADD VARIANT ERROR:", err);
     return res.status(500).json({ message: 'Server error' });
   } finally {
@@ -654,13 +675,187 @@ exports.addVariant = async (req, res) => {
   }
 };
 
-// Add price tier
+
+// =============================================
+// ✅ NEW: ADD VARIANT SIZE
+// POST /variants/sizes
+// =============================================
+exports.addVariantSize = async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    const currentUser = req.user;
+    const { product_variant_id, size, sku, stock_quantity, is_active } = req.body;
+
+    if (!product_variant_id || !size || !sku) {
+      return res.status(400).json({ message: 'product_variant_id, size, and sku are required' });
+    }
+
+    // Auth check via join
+    const [variantData] = await connection.query(
+      `SELECT p.org_id FROM product_variants v
+       JOIN products p ON v.product_id = p.id
+       WHERE v.id = ? AND v.deleted_at IS NULL AND p.deleted_at IS NULL`,
+      [product_variant_id]
+    );
+
+    if (!variantData.length) {
+      return res.status(404).json({ message: 'Variant not found' });
+    }
+
+    if (currentUser.role === 'ADMIN' && variantData[0].org_id !== currentUser.org_id) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    const [result] = await connection.query(
+      `INSERT INTO product_variant_sizes
+       (product_variant_id, size, sku, stock_quantity, is_active)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        product_variant_id,
+        size.toUpperCase(),
+        sku.trim(),
+        stock_quantity || 0,
+        is_active ?? 1
+      ]
+    );
+
+    return res.status(201).json({
+      message: 'Size added successfully',
+      sizeId: result.insertId
+    });
+
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      if (err.sqlMessage.includes('uniq_variant_size')) {
+        return res.status(400).json({ message: 'This size already exists for this variant.' });
+      }
+      if (err.sqlMessage.includes('uniq_size_sku')) {
+        return res.status(400).json({ message: 'SKU already exists. Please use a unique SKU.' });
+      }
+    }
+    console.error("ADD VARIANT SIZE ERROR:", err);
+    return res.status(500).json({ message: 'Server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+
+// =============================================
+// ✅ NEW: UPDATE VARIANT SIZE
+// PUT /variants/sizes/:sizeId
+// =============================================
+exports.updateVariantSize = async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    const currentUser = req.user;
+    const { sizeId } = req.params;
+    const { size, sku, stock_quantity, is_active } = req.body;
+
+    const [sizeData] = await connection.query(
+      `SELECT pvs.id, p.org_id FROM product_variant_sizes pvs
+       JOIN product_variants pv ON pvs.product_variant_id = pv.id
+       JOIN products p ON pv.product_id = p.id
+       WHERE pvs.id = ? AND pvs.deleted_at IS NULL`,
+      [sizeId]
+    );
+
+    if (!sizeData.length) {
+      return res.status(404).json({ message: 'Size not found' });
+    }
+
+    if (currentUser.role === 'ADMIN' && sizeData[0].org_id !== currentUser.org_id) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    const parseBoolean = (val) => {
+      if (val === undefined || val === null) return undefined;
+      if (typeof val === 'boolean') return val ? 1 : 0;
+      if (val === 'true' || val === 1 || val === '1') return 1;
+      return 0;
+    };
+
+    await connection.query(
+      `UPDATE product_variant_sizes SET
+        size = COALESCE(?, size),
+        sku = COALESCE(?, sku),
+        stock_quantity = COALESCE(?, stock_quantity),
+        is_active = COALESCE(?, is_active),
+        updated_at = NOW()
+       WHERE id = ? AND deleted_at IS NULL`,
+      [
+        size ? size.toUpperCase() : undefined,
+        sku  ? sku.trim()         : undefined,
+        stock_quantity !== undefined ? parseInt(stock_quantity) : undefined,
+        parseBoolean(is_active),
+        sizeId
+      ]
+    );
+
+    return res.json({ message: 'Size updated successfully' });
+
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ message: 'Duplicate size or SKU.' });
+    }
+    console.error("UPDATE VARIANT SIZE ERROR:", err);
+    return res.status(500).json({ message: 'Server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+
+// =============================================
+// ✅ NEW: DELETE VARIANT SIZE (soft delete)
+// DELETE /variants/sizes/:sizeId
+// =============================================
+exports.deleteVariantSize = async (req, res) => {
+  const connection = await db.getConnection();
+  try {
+    const currentUser = req.user;
+    const { sizeId } = req.params;
+
+    const [sizeData] = await connection.query(
+      `SELECT pvs.id, p.org_id FROM product_variant_sizes pvs
+       JOIN product_variants pv ON pvs.product_variant_id = pv.id
+       JOIN products p ON pv.product_id = p.id
+       WHERE pvs.id = ? AND pvs.deleted_at IS NULL`,
+      [sizeId]
+    );
+
+    if (!sizeData.length) {
+      return res.status(404).json({ message: 'Size not found' });
+    }
+
+    if (currentUser.role === 'ADMIN' && sizeData[0].org_id !== currentUser.org_id) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    await connection.query(
+      'UPDATE product_variant_sizes SET deleted_at = NOW() WHERE id = ?',
+      [sizeId]
+    );
+
+    return res.json({ message: 'Size deleted successfully' });
+
+  } catch (err) {
+    console.error("DELETE VARIANT SIZE ERROR:", err);
+    return res.status(500).json({ message: 'Server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+
+// =============================================
+// ADD VARIANT PRICE TIER
+// =============================================
 exports.addVariantPriceTier = async (req, res) => {
   try {
     const { product_variant_id, min_quantity, unit_price } = req.body;
     const currentUser = req.user;
 
-    // 1. Join karke check karo ki variant jis product ka hai, uski org_id kya hai
     const [variantData] = await db.query(
       `SELECT p.org_id FROM product_variants v 
        JOIN products p ON v.product_id = p.id 
@@ -670,7 +865,6 @@ exports.addVariantPriceTier = async (req, res) => {
 
     if (!variantData.length) return res.status(404).json({ message: 'Variant or Product not found' });
 
-    // 2. Authorization Check
     if (currentUser.role === 'ADMIN' && variantData[0].org_id !== currentUser.org_id) {
       return res.status(403).json({ message: 'Not authorized to manage pricing for this organization' });
     }
@@ -679,7 +873,7 @@ exports.addVariantPriceTier = async (req, res) => {
       `INSERT INTO product_variant_price_tiers (product_variant_id, min_quantity, unit_price) VALUES (?, ?, ?)`,
       [product_variant_id, min_quantity, unit_price]
     );
-    
+
     return res.status(201).json({ message: 'Price tier added', id: result.insertId });
   } catch (err) {
     console.error(err);
@@ -687,14 +881,19 @@ exports.addVariantPriceTier = async (req, res) => {
   }
 };
 
-// Add product variant images (transaction-safe)
+
+// =============================================
+// ADD VARIANT IMAGE
+// =============================================
 exports.addVariantImage = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const currentUser = req.user;
     const { product_variant_id, view_type } = req.body;
+
     if (!req.files || !req.files.length)
       return res.status(400).json({ message: 'Images required' });
+
     const [variantData] = await connection.query(
       `SELECT v.id, v.product_id, p.org_id, c.name AS category_name
        FROM product_variants v
@@ -703,28 +902,33 @@ exports.addVariantImage = async (req, res) => {
        WHERE v.id = ? AND p.deleted_at IS NULL`,
       [product_variant_id]
     );
+
     if (!variantData.length)
       return res.status(404).json({ message: 'Variant or Product not found' });
+
     const variant = variantData[0];
+
     if (currentUser.role === 'ADMIN' && variant.org_id !== currentUser.org_id) {
       return res.status(403).json({ message: 'Not authorized' });
     }
-  const ALLOWED_VIEW_TYPES = ['FRONT', 'BACK', 'SIDE'];
-const viewUpper = view_type.toUpperCase();
 
-if (!ALLOWED_VIEW_TYPES.includes(viewUpper)) {
-  return res.status(400).json({ 
-    message: `Invalid view_type. Allowed: ${ALLOWED_VIEW_TYPES.join(', ')}` 
-  });
-}
+    const ALLOWED_VIEW_TYPES = ['FRONT', 'BACK', 'SIDE'];
+    const viewUpper = view_type.toUpperCase();
+
+    if (!ALLOWED_VIEW_TYPES.includes(viewUpper)) {
+      return res.status(400).json({
+        message: `Invalid view_type. Allowed: ${ALLOWED_VIEW_TYPES.join(', ')}`
+      });
+    }
+
     await connection.beginTransaction();
     const results = [];
+
     for (const file of req.files) {
-      const image_url = file.path;
       const [dbResult] = await connection.query(
         `INSERT INTO product_variant_images (product_variant_id, image_url, view_type)
          VALUES (?, ?, ?)`,
-        [product_variant_id, image_url, viewUpper]
+        [product_variant_id, file.path, viewUpper]
       );
       results.push(dbResult.insertId);
     }
