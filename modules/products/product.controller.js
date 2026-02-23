@@ -65,21 +65,19 @@ exports.createProduct = async (req, res) => {
     await connection.rollback();
     console.error("CREATE PRODUCT ERROR:", err.message, err.code);
 
-    // ✅ Specific error handling
     if (err.code === 'ER_DUP_ENTRY') {
       if (err.sqlMessage && err.sqlMessage.includes('slug')) {
-        return res.status(400).json({ message: 'Is naam ka product already exist karta hai. Koi doosra naam try karein.' });
+        return res.status(400).json({ message: 'Is naam ka product already exist karta hai. Alag naam try karein.' });
       }
-      return res.status(400).json({ message: 'Duplicate entry: ' + err.sqlMessage });
+      return res.status(400).json({ message: 'Duplicate entry: ' + (err.sqlMessage || '') });
     }
     if (err.code === 'ER_NO_REFERENCED_ROW_2' || err.code === 'ER_NO_REFERENCED_ROW') {
-      return res.status(400).json({ message: 'Invalid category_id ya subcategory_id. Please valid values select karein.' });
+      return res.status(400).json({ message: 'Invalid category ya subcategory. Please valid values select karein.' });
     }
     if (err.code === 'ER_BAD_NULL_ERROR') {
-      return res.status(400).json({ message: 'Required field missing: ' + err.sqlMessage });
+      return res.status(400).json({ message: 'Required field missing: ' + (err.sqlMessage || '') });
     }
 
-    // Generic — always send err.message string, never the err object itself
     return res.status(500).json({ message: err.message || 'Server error' });
   } finally {
     connection.release();
@@ -452,8 +450,8 @@ exports.updateProduct = async (req, res) => {
         else {
           const [newVariant] = await connection.query(
             `INSERT INTO product_variants 
-             (product_id, color, sku, price, is_active, created_at)
-             VALUES (?, ?, ?, ?, ?, NOW())`,
+             (product_id, color, sku, price, is_active, size, stock_quantity, created_at)
+             VALUES (?, ?, ?, ?, ?, NULL, NULL, NOW())`,
             [
               id,
               variant.color || null,
@@ -662,8 +660,8 @@ exports.addVariant = async (req, res) => {
 
     const [result] = await connection.query(
       `INSERT INTO product_variants 
-       (product_id, color, sku, price, is_active)
-       VALUES (?, ?, ?, ?, ?)`,
+       (product_id, color, sku, price, is_active, size, stock_quantity)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
       [
         product_id,
         color.toUpperCase(),
@@ -680,12 +678,15 @@ exports.addVariant = async (req, res) => {
 
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
-      if (err.sqlMessage.includes('uniq_variant_sku')) {
+      if (err.sqlMessage && err.sqlMessage.includes('uniq_variant_sku')) {
         return res.status(400).json({ message: 'SKU already exists. Please use a unique SKU.' });
       }
+      if (err.sqlMessage && err.sqlMessage.includes('uniq_product_color')) {
+        return res.status(400).json({ message: 'Is product ka yeh color already exist karta hai.' });
+      }
     }
-    console.error("ADD VARIANT ERROR:", err);
-    return res.status(500).json({ message: 'Server error' });
+    console.error("ADD VARIANT ERROR:", err.message, err.code);
+    return res.status(500).json({ message: err.message || 'Server error' });
   } finally {
     connection.release();
   }
