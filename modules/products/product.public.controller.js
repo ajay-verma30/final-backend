@@ -148,7 +148,7 @@ exports.getPublicProductDetail = async (req, res) => {
       db.query(`
         SELECT 
           pc.id, pc.name AS custom_name, pc.product_variant_image_id, pc.logo_variant_id,
-          pc.pos_x, pc.pos_y, pc.logo_width, pc.logo_height, pc.org_id,
+          pc.pos_x, pc.pos_y, pc.logo_width, pc.logo_height, pc.rotation, pc.org_id,
           lv.id AS lv_id, lv.color AS logo_color, lv.image_url AS logo_url,
           l.id  AS logo_id, l.title AS logo_title, l.org_id AS logo_org_id
         FROM product_customizations pc
