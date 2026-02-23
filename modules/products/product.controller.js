@@ -74,6 +74,11 @@ exports.getProducts = async (req, res) => {
   try {
     const currentUser = req.user;
 
+    // 1. Dashboard Security: If there is no user, block access immediately
+    if (!currentUser) {
+      return res.status(401).json({ message: "Unauthorized: Dashboard access required" });
+    }
+
     let query = `
       SELECT 
         p.id, 
@@ -95,14 +100,24 @@ exports.getProducts = async (req, res) => {
       LEFT JOIN users u ON p.created_by = u.id
       WHERE p.deleted_at IS NULL
     `;
+
     const queryParams = [];
-    if (currentUser) {
-      if (currentUser.role === 'ADMIN') {
-        query += ` AND (p.org_id = ? OR p.is_public = 1)`;
-        queryParams.push(currentUser.org_id);
-      }
+
+    // 2. Logic Implementation
+    if (currentUser.role === 'SUPER') {
+      // SUPER sees all: We don't append any extra org_id filters
+      console.log("Super user access: Fetching all records");
+      
+    } else if (currentUser.role === 'ADMIN') {
+      // ADMIN only sees their own organization's products
+      query += ` AND p.org_id = ?`;
+      queryParams.push(currentUser.org_id);
+      
     } else {
-      query += ` AND p.is_public = 1`;
+      // Catch-all for other roles (e.g., 'USER') to prevent them from seeing everything
+      // You can either return empty or restrict them further here
+      query += ` AND p.org_id = ? AND p.is_public = 1`;
+      queryParams.push(currentUser.org_id);
     }
 
     query += ` ORDER BY p.created_at DESC`;
@@ -111,6 +126,7 @@ exports.getProducts = async (req, res) => {
 
     return res.json({
       message: "Products fetched successfully",
+      count: products.length,
       data: products
     });
 
@@ -119,6 +135,7 @@ exports.getProducts = async (req, res) => {
     return res.status(500).json({ message: 'Server error' });
   }
 };
+
 
 // Get a specific product with variants, images, and customizations
 exports.getProductById = async (req, res) => {
