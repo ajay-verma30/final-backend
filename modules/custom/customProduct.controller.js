@@ -1,25 +1,37 @@
 const db = require('../../config/db');
 
-// 1. Create Customization
+// ── Create Customization ──────────────────────────────────────────────────────
 exports.createCustomization = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const currentUser = req.user;
     let {
-  name,
-  product_id,
-  product_variant_image_id,
-  logo_variant_id,
-  pos_x,
-  pos_y,
-  logo_width,
-  logo_height,
-  org_id
-} = req.body;
+      name,
+      product_id,
+      product_variant_image_id,
+      logo_variant_id,
+      pos_x,
+      pos_y,
+      logo_width,
+      logo_height,
+      rotation = 0,   // NEW: default 0 degrees
+      org_id
+    } = req.body;
 
-if (!name || !product_id || !product_variant_image_id || !logo_variant_id || pos_x === undefined || pos_y === undefined) {
-  return res.status(400).json({ message: 'Missing required fields for customization' });
-}
+    if (!name || !product_id || !product_variant_image_id || !logo_variant_id || pos_x === undefined || pos_y === undefined) {
+      return res.status(400).json({ message: 'Missing required fields for customization' });
+    }
+
+    // Validate rotation is a valid number
+    const parsedRotation = parseFloat(rotation);
+    if (isNaN(parsedRotation)) {
+      return res.status(400).json({ message: 'rotation must be a valid number (degrees)' });
+    }
+
+    // Normalize rotation to -180 to 180 range (optional but clean)
+    const normalizedRotation = ((parsedRotation % 360) + 360) % 360;
+    // Convert to -180..180
+    const finalRotation = normalizedRotation > 180 ? normalizedRotation - 360 : normalizedRotation;
 
     // RBAC: Set org_id based on role
     if (currentUser.role === 'ADMIN') {
@@ -30,23 +42,24 @@ if (!name || !product_id || !product_variant_image_id || !logo_variant_id || pos
 
     await connection.beginTransaction();
 
-   const [result] = await connection.query(
-  `INSERT INTO product_customizations 
-  (name, product_id, product_variant_image_id, logo_variant_id, pos_x, pos_y, logo_width, logo_height, org_id, created_by)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  [
-    req.body.name,
-    product_id,
-    product_variant_image_id,
-    logo_variant_id,
-    pos_x,
-    pos_y,
-    logo_width || 0,
-    logo_height || null,
-    org_id,
-    currentUser.id
-  ]
-);
+    const [result] = await connection.query(
+      `INSERT INTO product_customizations 
+       (name, product_id, product_variant_image_id, logo_variant_id, pos_x, pos_y, logo_width, logo_height, rotation, org_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name,
+        product_id,
+        product_variant_image_id,
+        logo_variant_id,
+        pos_x,
+        pos_y,
+        logo_width || 0,
+        logo_height || null,
+        finalRotation,
+        org_id,
+        currentUser.id
+      ]
+    );
 
     await connection.commit();
     return res.status(201).json({
@@ -63,29 +76,32 @@ if (!name || !product_id || !product_variant_image_id || !logo_variant_id || pos
   }
 };
 
-// 4. Get Customization(s)
+
+// ── Get Customization(s) ──────────────────────────────────────────────────────
 exports.getCustomizations = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const currentUser = req.user;
-    const { id } = req.params; // optional (for single record)
-    const { org_id } = req.query; // optional (for SUPER filtering)
+    const { id } = req.params;
+    const { org_id } = req.query;
 
     let query = `
-      SELECT *
+      SELECT 
+        id, name, product_id, product_variant_image_id,
+        logo_variant_id, pos_x, pos_y, logo_width, logo_height,
+        rotation,
+        org_id, created_by, created_at, updated_at
       FROM product_customizations
       WHERE deleted_at IS NULL
     `;
 
     let params = [];
 
-    // If fetching single customization
     if (id) {
       query += ` AND id = ?`;
       params.push(id);
     }
 
-    // RBAC logic
     if (currentUser.role === 'ADMIN') {
       query += ` AND org_id = ?`;
       params.push(currentUser.org_id);
@@ -113,17 +129,28 @@ exports.getCustomizations = async (req, res) => {
   }
 };
 
-// 2. Update Customization
+
+// ── Update Customization ──────────────────────────────────────────────────────
 exports.updateCustomization = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const { id } = req.params;
     const currentUser = req.user;
-    const { pos_x, pos_y, logo_width, logo_height } = req.body;
+    const { pos_x, pos_y, logo_width, logo_height, rotation } = req.body;
+
+    // Validate rotation if provided
+    let finalRotation = undefined;
+    if (rotation !== undefined) {
+      const parsed = parseFloat(rotation);
+      if (isNaN(parsed)) {
+        return res.status(400).json({ message: 'rotation must be a valid number (degrees)' });
+      }
+      const normalized = ((parsed % 360) + 360) % 360;
+      finalRotation = normalized > 180 ? normalized - 360 : normalized;
+    }
 
     await connection.beginTransaction();
 
-    // 1️⃣ Check existence and authorization
     const [existing] = await connection.query(
       'SELECT org_id FROM product_customizations WHERE id = ? AND deleted_at IS NULL',
       [id]
@@ -134,22 +161,21 @@ exports.updateCustomization = async (req, res) => {
       return res.status(404).json({ message: 'Customization not found' });
     }
 
-    // RBAC logic
     if (currentUser.role === 'ADMIN' && existing[0].org_id !== currentUser.org_id) {
       await connection.rollback();
       return res.status(403).json({ message: 'Not authorized to update this customization' });
     }
 
-    // 2️⃣ Update logic
     await connection.query(
       `UPDATE product_customizations SET 
-        pos_x = COALESCE(?, pos_x),
-        pos_y = COALESCE(?, pos_y),
+        pos_x      = COALESCE(?, pos_x),
+        pos_y      = COALESCE(?, pos_y),
         logo_width = COALESCE(?, logo_width),
-        logo_height = COALESCE(?, logo_height),
+        logo_height= COALESCE(?, logo_height),
+        rotation   = COALESCE(?, rotation),
         updated_at = NOW()
       WHERE id = ?`,
-      [pos_x, pos_y, logo_width, logo_height, id]
+      [pos_x, pos_y, logo_width, logo_height, finalRotation ?? null, id]
     );
 
     await connection.commit();
@@ -164,7 +190,8 @@ exports.updateCustomization = async (req, res) => {
   }
 };
 
-// 3. Delete Customization (Soft Delete)
+
+// ── Delete Customization (Soft Delete) ────────────────────────────────────────
 exports.deleteCustomization = async (req, res) => {
   const connection = await db.getConnection();
   try {
@@ -183,7 +210,6 @@ exports.deleteCustomization = async (req, res) => {
       return res.status(404).json({ message: 'Customization not found' });
     }
 
-    // RBAC logic
     if (currentUser.role === 'ADMIN' && existing[0].org_id !== currentUser.org_id) {
       await connection.rollback();
       return res.status(403).json({ message: 'Not authorized' });
