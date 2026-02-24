@@ -37,10 +37,15 @@ exports.createUser = async (req, res) => {
     }
 
     const [existingUser] = await connection.query(
-      "SELECT id FROM users WHERE email = ? AND deleted_at IS NULL",
+      "SELECT id, deleted_at FROM users WHERE email = ?",
       [email]
     );
-    if (existingUser.length) return res.status(409).json({ message: "Email already exists" });
+    if (existingUser.length) {
+      const msg = existingUser[0].deleted_at
+        ? "This email belongs to a deleted account. Please contact support."
+        : "A user with this email already exists.";
+      return res.status(409).json({ message: msg });
+    }
 
     const tempPassword = crypto.randomBytes(10).toString("hex");
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -71,6 +76,10 @@ exports.createUser = async (req, res) => {
     return res.status(201).json({ message: "User created. Password setup email sent." });
   } catch (err) {
     await connection.rollback();
+    // DB-level duplicate safeguard (race condition ya koi aur case)
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ message: "A user with this email already exists." });
+    }
     console.error(err);
     return res.status(500).json({ message: "Server error" });
   } finally {
