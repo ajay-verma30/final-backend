@@ -30,7 +30,7 @@ exports.createProduct = async (req, res) => {
        gender, base_price, created_by, is_public, is_active, is_featured, meta_title, meta_description)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        finalOrgId, category_id, subcategory_id, name, slug,
+        finalOrgId, category_id, subcategory_id || null,, name, slug,
         description || null, short_description || null, gender || null,
         base_price || 0, currentUser.id, is_public ?? 0,
         is_active ?? 1, is_featured ?? 0, meta_title || null, meta_description || null
