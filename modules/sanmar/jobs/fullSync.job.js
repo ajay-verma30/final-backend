@@ -316,12 +316,11 @@ async function runFullSync() {
   console.log(`${'═'.repeat(50)}\n`);
 }
 
-// Direct run karo
-runFullSync()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error('Full sync crashed:', err);
-    process.exit(1);
-  });
+// Sirf direct run pe chale (node fullSync.job.js), require pe nahi
+if (require.main === module) {
+  runFullSync()
+    .then(() => process.exit(0))
+    .catch(err => { console.error('Full sync crashed:', err); process.exit(1); });
+}
 
 module.exports = { syncStyle, runFullSync };
