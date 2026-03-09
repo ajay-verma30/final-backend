@@ -75,6 +75,25 @@ exports.sendCouponEmail = async (toEmail, firstName, amount, batchName, couponCo
   }
 };
 
+
+
+// ✅ SEND CONTACT/QUOTE REQUEST EMAIL
+exports.sendQuoteRequestEmail = async (companyName, category, quantity, message) => {
+  const sendSmtpEmail = new Brevo.SendSmtpEmail();
+  sendSmtpEmail.subject = `New Quote Request from ${companyName}`;
+  sendSmtpEmail.htmlContent = getQuoteEmailTemplate(companyName, category, quantity, message);
+  sendSmtpEmail.sender = { name: "Ecom App", email: process.env.EMAIL_FROM };
+  sendSmtpEmail.to = [{ email: "ajay.verma1630@outlook.com" }];
+
+  try {
+    await apiInstance.sendTransacEmail(sendSmtpEmail);
+    console.log(`✅ Quote request email sent from ${companyName}`);
+  } catch (error) {
+    console.error("Quote email failed:", error);
+    throw new Error('EMAIL_SEND_FAILED');
+  }
+};
+
 // ─── Templates ───────────────────────────────────────────────────────────────
 
 function getEmailTemplate(firstName, resetLink, type) {
@@ -248,6 +267,66 @@ function getCouponEmailTemplate(firstName, amount, batchName, couponCode) {
             <td align="center" style="background:#f9fafb;padding:30px;font-size:12px;color:#94a3b8;">
               <p style="margin:0;">You received this because you are a valued member of our community.</p>
               <p style="margin:8px 0 0 0;">© ${new Date().getFullYear()} Ecom Platform. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+}
+
+
+function getQuoteEmailTemplate(companyName, category, quantity, message) {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8" /><title>New Quote Request</title></head>
+<body style="margin:0;padding:0;background-color:#f4f6f8;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f6f8;padding:30px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+          <tr>
+            <td align="center" style="background:linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);padding:30px;">
+              <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:bold;">New Quote Request</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:40px 30px;color:#333333;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+                    <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Company</span><br/>
+                    <span style="font-size:16px;color:#111827;font-weight:600;">${companyName}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+                    <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Category</span><br/>
+                    <span style="font-size:16px;color:#111827;font-weight:600;">${category}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+                    <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Quantity</span><br/>
+                    <span style="font-size:16px;color:#111827;font-weight:600;">${quantity}</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 0;">
+                    <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Message</span><br/>
+                    <p style="font-size:15px;color:#374151;line-height:1.6;margin:8px 0 0;">${message}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="background:#f9fafb;padding:20px;font-size:12px;color:#888888;border-top:1px solid #e5e7eb;">
+              © ${new Date().getFullYear()} Ecom Platform. All rights reserved.
             </td>
           </tr>
         </table>

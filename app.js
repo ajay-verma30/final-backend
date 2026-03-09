@@ -28,6 +28,7 @@ const orderCheckout = require('./modules/checkout/checkout.routes');
 const shopfitlers = require('./modules/shopfilters/shopfilters.routes');
 const sanmarRoutes = require('./modules/sanmar/sanmar.routes');
 const { startCron } = require('./modules/sanmar/jobs/deltaSync.job');
+const contactRoutes = require('./modules/contact/contact.routes');
 const app = express();
 app.set('trust proxy', 1);
 
@@ -80,6 +81,7 @@ app.use('/api/user/orders', userOrders);
 app.use('/api/user/checkout', orderCheckout);
 app.use('/api/public/shop-filters', shopfitlers);
 app.use('/api/sanmar', sanmarRoutes);
+app.use('/api/contact', contactRoutes);
 startCron(); 
 
 module.exports = app;
