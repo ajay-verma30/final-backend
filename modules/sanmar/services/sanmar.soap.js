@@ -23,7 +23,7 @@ async function getClient(service) {
   if (clientCache[service]) return clientCache[service];
 
   const wsdlUrl = getWsdlUrl(service);
-  const client = await soap.createClientAsync(wsdlUrl);
+  const client = await soap.createClientAsync(wsdlUrl, { timeout: 30000 });  
   clientCache[service] = client;
   return client;
 }
