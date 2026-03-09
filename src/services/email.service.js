@@ -78,7 +78,7 @@ exports.sendCouponEmail = async (toEmail, firstName, amount, batchName, couponCo
 
 
 // ✅ SEND CONTACT/QUOTE REQUEST EMAIL
-exports.sendQuoteRequestEmail = async (companyName, category, quantity, message) => {
+exports.sendQuoteRequestEmail = async (companyName, email, phone, category, quantity, message) => {
   const sendSmtpEmail = new Brevo.SendSmtpEmail();
   sendSmtpEmail.subject = `New Quote Request from ${companyName}`;
   sendSmtpEmail.htmlContent = getQuoteEmailTemplate(companyName, category, quantity, message);
@@ -303,6 +303,18 @@ function getQuoteEmailTemplate(companyName, category, quantity, message) {
                     <span style="font-size:16px;color:#111827;font-weight:600;">${companyName}</span>
                   </td>
                 </tr>
+                <tr>
+  <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+    <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Email</span><br/>
+    <span style="font-size:16px;color:#111827;font-weight:600;">${email}</span>
+  </td>
+</tr>
+<tr>
+  <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+    <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Phone</span><br/>
+    <span style="font-size:16px;color:#111827;font-weight:600;">${phone || 'Not provided'}</span>
+  </td>
+</tr>
                 <tr>
                   <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
                     <span style="font-size:12px;color:#6b7280;text-transform:uppercase;font-weight:700;">Category</span><br/>
