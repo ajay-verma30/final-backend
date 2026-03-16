@@ -43,69 +43,77 @@ exports.createPaymentIntent = async (req, res) => {
     const total = parseFloat((subtotal + shipping).toFixed(2));
     const amountCents = Math.round(total * 100);
 
-  // ── 3. Check for an existing reusable PENDING order ──────────────────────
-const [existingOrders] = await connection.query(
-  `SELECT id, stripe_payment_intent_id, total_price, subtotal
-   FROM orders
-   WHERE ordered_by = ? AND status = 'PENDING'
-   ORDER BY created_at DESC
-   LIMIT 1`,
-  [user_id],
-);
+    // ── 3. Check for an existing reusable PENDING order ──────────────────────
+    let forceNewIntent = false; // ← tracks whether we must bypass idempotency cache
 
-if (existingOrders.length > 0) {
-  const existing = existingOrders[0];
-  try {
-    const existingIntent = await stripe.paymentIntents.retrieve(
-      existing.stripe_payment_intent_id,
+    const [existingOrders] = await connection.query(
+      `SELECT id, stripe_payment_intent_id, total_price, subtotal
+       FROM orders
+       WHERE ordered_by = ? AND status = 'PENDING'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [user_id],
     );
 
-    const reusableStatuses = [
-      'requires_payment_method',
-      'requires_confirmation',
-      'requires_action',
-    ];
+    if (existingOrders.length > 0) {
+      const existing = existingOrders[0];
+      try {
+        const existingIntent = await stripe.paymentIntents.retrieve(
+          existing.stripe_payment_intent_id,
+        );
 
-    const terminalStatuses = ['succeeded', 'canceled'];  // ← add this
+        const reusableStatuses = [
+          "requires_payment_method",
+          "requires_confirmation",
+          "requires_action",
+        ];
 
-    if (reusableStatuses.includes(existingIntent.status)) {
-      // Same cart amount check — agar amount change hua toh reuse mat karo
-      if (existingIntent.amount === amountCents) {
-        return res.status(200).json({
-          success:      true,
-          clientSecret: existingIntent.client_secret,
-          order_id:     existing.id,
-          total:        parseFloat(existing.total_price),
-          subtotal:     parseFloat(existing.subtotal),
-          shipping:     parseFloat(existing.total_price) - parseFloat(existing.subtotal),
-        });
+        const terminalStatuses = ["succeeded", "canceled"];
+
+        if (reusableStatuses.includes(existingIntent.status)) {
+          if (existingIntent.amount === amountCents) {
+            // ✅ Still valid and same amount — reuse it
+            return res.status(200).json({
+              success:      true,
+              clientSecret: existingIntent.client_secret,
+              order_id:     existing.id,
+              total:        parseFloat(existing.total_price),
+              subtotal:     parseFloat(existing.subtotal),
+              shipping:     parseFloat(existing.total_price) - parseFloat(existing.subtotal),
+            });
+          }
+          // Amount changed — cancel old intent, create fresh one
+          await stripe.paymentIntents.cancel(existing.stripe_payment_intent_id);
+          forceNewIntent = true;
+        }
+
+        if (terminalStatuses.includes(existingIntent.status)) {
+          // Stale PENDING order — sync its real status from Stripe into DB
+          const newStatus = existingIntent.status === "succeeded" ? "CONFIRMED" : "CANCELLED";
+          await connection.query(
+            `UPDATE orders SET status = ? WHERE id = ?`,
+            [newStatus, existing.id],
+          );
+          forceNewIntent = true; // ← must NOT reuse the cached Stripe intent
+        }
+
+      } catch (e) {
+        console.warn("Could not retrieve existing PaymentIntent, creating new one:", e.message);
+        forceNewIntent = true;
       }
-      // Amount changed — cancel old intent, fall through to create new one
-      await stripe.paymentIntents.cancel(existing.stripe_payment_intent_id);
     }
-
-    if (terminalStatuses.includes(existingIntent.status)) {
-      // Mark stale PENDING order as CONFIRMED or CANCELLED in DB
-      const newStatus = existingIntent.status === 'succeeded' ? 'CONFIRMED' : 'CANCELLED';
-      await connection.query(
-        `UPDATE orders SET status = ? WHERE id = ?`,
-        [newStatus, existing.id]
-      );
-      // Fall through to create a fresh order + intent
-    }
-
-  } catch (e) {
-    console.warn("Could not retrieve existing PaymentIntent, creating new one:", e.message);
-  }
-}
 
     // ── 4. Build idempotency key from user + cart fingerprint ────────────────
+    // forceNewIntent = true → append timestamp so Stripe creates a brand-new intent
+    // instead of returning the cached (possibly terminal) one for this fingerprint
     const cartFingerprint = cartRows
       .map((item) => `${item.product_variant_id}:${item.quantity}`)
       .sort()
       .join("|");
 
-    const idempotencyKey = `pi_${user_id}_${Buffer.from(cartFingerprint).toString("base64")}`;
+    const idempotencyKey = forceNewIntent
+      ? `pi_${user_id}_${Buffer.from(cartFingerprint).toString("base64")}_${Date.now()}`
+      : `pi_${user_id}_${Buffer.from(cartFingerprint).toString("base64")}`;
 
     // ── 5. Create Stripe PaymentIntent ───────────────────────────────────────
     const paymentIntent = await stripe.paymentIntents.create(
@@ -113,9 +121,9 @@ if (existingOrders.length > 0) {
         amount: amountCents,
         currency: "usd",
         metadata: {
-          type: "ORDER",
+          type:    "ORDER",
           user_id: String(user_id),
-          ...(org_id && { org_id: String(org_id) }), // ← only set if present
+          ...(org_id && { org_id: String(org_id) }),
         },
       },
       { idempotencyKey },
@@ -127,11 +135,11 @@ if (existingOrders.length > 0) {
     const [orderResult] = await connection.query(
       org_id
         ? `INSERT INTO orders
-         (org_id, ordered_by, subtotal, total_price, currency, status, stripe_payment_intent_id)
-       VALUES (?, ?, ?, ?, 'USD', 'PENDING', ?)`
+             (org_id, ordered_by, subtotal, total_price, currency, status, stripe_payment_intent_id)
+           VALUES (?, ?, ?, ?, 'USD', 'PENDING', ?)`
         : `INSERT INTO orders
-         (ordered_by, subtotal, total_price, currency, status, stripe_payment_intent_id)
-       VALUES (?, ?, ?, 'USD', 'PENDING', ?)`,
+             (ordered_by, subtotal, total_price, currency, status, stripe_payment_intent_id)
+           VALUES (?, ?, ?, 'USD', 'PENDING', ?)`,
       org_id
         ? [org_id, user_id, subtotal, total, paymentIntent.id]
         : [user_id, subtotal, total, paymentIntent.id],
@@ -149,13 +157,7 @@ if (existingOrders.length > 0) {
       await connection.query(
         `INSERT INTO order_items (order_id, product_variant_id, quantity, unit_price, total_price)
          VALUES (?, ?, ?, ?, ?)`,
-        [
-          order_id,
-          item.product_variant_id,
-          item.quantity,
-          unit_price,
-          total_price,
-        ],
+        [order_id, item.product_variant_id, item.quantity, unit_price, total_price],
       );
     }
 
@@ -163,11 +165,11 @@ if (existingOrders.length > 0) {
     await connection.query(
       org_id
         ? `INSERT INTO transactions
-         (type, status, org_id, created_by, payment_intent_id, amount, currency, description, metadata)
-       VALUES ('PAYMENT', 'initiated', ?, ?, ?, ?, 'usd', ?, ?)`
+             (type, status, org_id, created_by, payment_intent_id, amount, currency, description, metadata)
+           VALUES ('PAYMENT', 'initiated', ?, ?, ?, ?, 'usd', ?, ?)`
         : `INSERT INTO transactions
-         (type, status, created_by, payment_intent_id, amount, currency, description, metadata)
-       VALUES ('PAYMENT', 'initiated', ?, ?, ?, 'usd', ?, ?)`,
+             (type, status, created_by, payment_intent_id, amount, currency, description, metadata)
+           VALUES ('PAYMENT', 'initiated', ?, ?, ?, 'usd', ?, ?)`,
       org_id
         ? [
             org_id,
@@ -189,13 +191,14 @@ if (existingOrders.length > 0) {
     await connection.commit();
 
     return res.status(201).json({
-      success: true,
+      success:      true,
       clientSecret: paymentIntent.client_secret,
       order_id,
       total,
       subtotal,
       shipping,
     });
+
   } catch (err) {
     await connection.rollback();
     console.error("CREATE PAYMENT INTENT ERROR:", err);
