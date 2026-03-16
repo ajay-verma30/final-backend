@@ -43,45 +43,61 @@ exports.createPaymentIntent = async (req, res) => {
     const total = parseFloat((subtotal + shipping).toFixed(2));
     const amountCents = Math.round(total * 100);
 
-    // ── 3. Check for an existing reusable PENDING order ──────────────────────
-    const [existingOrders] = await connection.query(
-      `SELECT id, stripe_payment_intent_id, total_price, subtotal
-       FROM orders
-       WHERE ordered_by = ? AND status = 'PENDING'
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [user_id],
+  // ── 3. Check for an existing reusable PENDING order ──────────────────────
+const [existingOrders] = await connection.query(
+  `SELECT id, stripe_payment_intent_id, total_price, subtotal
+   FROM orders
+   WHERE ordered_by = ? AND status = 'PENDING'
+   ORDER BY created_at DESC
+   LIMIT 1`,
+  [user_id],
+);
+
+if (existingOrders.length > 0) {
+  const existing = existingOrders[0];
+  try {
+    const existingIntent = await stripe.paymentIntents.retrieve(
+      existing.stripe_payment_intent_id,
     );
 
-    if (existingOrders.length > 0) {
-      const existing = existingOrders[0];
-      try {
-        const existingIntent = await stripe.paymentIntents.retrieve(
-          existing.stripe_payment_intent_id,
-        );
-        const reusableStatuses = [
-          "requires_payment_method",
-          "requires_confirmation",
-          "requires_action",
-        ];
-        if (reusableStatuses.includes(existingIntent.status)) {
-          return res.status(200).json({
-            success: true,
-            clientSecret: existingIntent.client_secret,
-            order_id: existing.id,
-            total: parseFloat(existing.total_price),
-            subtotal: parseFloat(existing.subtotal),
-            shipping:
-              parseFloat(existing.total_price) - parseFloat(existing.subtotal),
-          });
-        }
-      } catch (e) {
-        console.warn(
-          "Could not retrieve existing PaymentIntent, creating new one:",
-          e.message,
-        );
+    const reusableStatuses = [
+      'requires_payment_method',
+      'requires_confirmation',
+      'requires_action',
+    ];
+
+    const terminalStatuses = ['succeeded', 'canceled'];  // ← add this
+
+    if (reusableStatuses.includes(existingIntent.status)) {
+      // Same cart amount check — agar amount change hua toh reuse mat karo
+      if (existingIntent.amount === amountCents) {
+        return res.status(200).json({
+          success:      true,
+          clientSecret: existingIntent.client_secret,
+          order_id:     existing.id,
+          total:        parseFloat(existing.total_price),
+          subtotal:     parseFloat(existing.subtotal),
+          shipping:     parseFloat(existing.total_price) - parseFloat(existing.subtotal),
+        });
       }
+      // Amount changed — cancel old intent, fall through to create new one
+      await stripe.paymentIntents.cancel(existing.stripe_payment_intent_id);
     }
+
+    if (terminalStatuses.includes(existingIntent.status)) {
+      // Mark stale PENDING order as CONFIRMED or CANCELLED in DB
+      const newStatus = existingIntent.status === 'succeeded' ? 'CONFIRMED' : 'CANCELLED';
+      await connection.query(
+        `UPDATE orders SET status = ? WHERE id = ?`,
+        [newStatus, existing.id]
+      );
+      // Fall through to create a fresh order + intent
+    }
+
+  } catch (e) {
+    console.warn("Could not retrieve existing PaymentIntent, creating new one:", e.message);
+  }
+}
 
     // ── 4. Build idempotency key from user + cart fingerprint ────────────────
     const cartFingerprint = cartRows
