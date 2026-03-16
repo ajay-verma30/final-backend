@@ -5,13 +5,7 @@ exports.createPaymentIntent = async (req, res) => {
   const connection = await db.getConnection();
   try {
     const user_id = req.user.id;
-    const org_id  = req.user.org_id;
-
-    if (!org_id) {
-      return res.status(400).json({
-        message: "Your account is not linked to an organisation. Please contact support.",
-      });
-    }
+    const org_id  = req.user.org_id || null; 
 
     // ── 1. Fetch the user's cart ─────────────────────────────────────────────
     const [cartRows] = await connection.query(
@@ -79,14 +73,11 @@ exports.createPaymentIntent = async (req, res) => {
           });
         }
       } catch (e) {
-        // Intent no longer valid — fall through to create a fresh one
         console.warn("Could not retrieve existing PaymentIntent, creating new one:", e.message);
       }
     }
 
     // ── 4. Build idempotency key from user + cart fingerprint ────────────────
-    // Same cart contents always maps to the same key — Stripe deduplicates on it.
-    // Any change to cart (qty, items) produces a new key → new PaymentIntent.
     const cartFingerprint = cartRows
       .map(item => `${item.product_variant_id}:${item.quantity}`)
       .sort()
@@ -94,7 +85,7 @@ exports.createPaymentIntent = async (req, res) => {
 
     const idempotencyKey = `pi_${user_id}_${Buffer.from(cartFingerprint).toString('base64')}`;
 
-    // ── 5. Create Stripe PaymentIntent (with idempotency key) ────────────────
+    // ── 5. Create Stripe PaymentIntent ───────────────────────────────────────
     const paymentIntent = await stripe.paymentIntents.create(
       {
         amount:   amountCents,
@@ -102,12 +93,10 @@ exports.createPaymentIntent = async (req, res) => {
         metadata: {
           type:    'ORDER',
           user_id: String(user_id),
-          org_id:  String(org_id),
+          ...(org_id && { org_id: String(org_id) }), // ← only set if present
         },
       },
-      {
-        idempotencyKey, // ← Stripe returns the same intent if key matches
-      }
+      { idempotencyKey }
     );
 
     // ── 6. Create pending order ──────────────────────────────────────────────
@@ -117,7 +106,7 @@ exports.createPaymentIntent = async (req, res) => {
       `INSERT INTO orders
          (org_id, ordered_by, subtotal, total_price, currency, status, stripe_payment_intent_id)
        VALUES (?, ?, ?, ?, 'USD', 'PENDING', ?)`,
-      [org_id, user_id, subtotal, total, paymentIntent.id]
+      [org_id, user_id, subtotal, total, paymentIntent.id] // ← org_id is null if not set
     );
 
     const order_id = orderResult.insertId;
@@ -140,7 +129,7 @@ exports.createPaymentIntent = async (req, res) => {
          (type, status, org_id, created_by, payment_intent_id, amount, currency, description, metadata)
        VALUES ('PAYMENT', 'initiated', ?, ?, ?, ?, 'usd', ?, ?)`,
       [
-        org_id,
+        org_id, // ← null if not set; ensure your DB column allows NULL
         user_id,
         paymentIntent.id,
         total,
