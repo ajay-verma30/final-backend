@@ -59,6 +59,9 @@ app.use('/api/webhooks/stripe', stripeWebhookRoute);
 app.use(express.json());
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+app.get('/', async(req,res)=>{
+  res.send(200).json({message:"working"});
+})
 app.use('/auth', authRoutes);
 app.use('/system', systemRoutes);
 app.use('/api/organizations', organizationRoutes);
